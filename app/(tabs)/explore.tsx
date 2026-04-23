@@ -1,20 +1,14 @@
-import { ScrollView, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
 
-import Feed from '@/components/feed/Feed';
+import GlobeWebView from '@/components/globe/GlobeWebView';
 import { useTheme } from '@/theme';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function TabTwoScreen() {
   const theme = useTheme();
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.backgroundPrimary }}>
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{ gap: 20, paddingBottom: 24 }}
-        showsVerticalScrollIndicator={false}
-      >
-        <Feed></Feed>
-      </ScrollView>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#000000' }}>
+      <GlobeWebView></GlobeWebView>
     </SafeAreaView>
   );
 }

@@ -1,10 +1,10 @@
 import { useTheme } from '@/theme';
 import { ReactNode, useState } from 'react';
 import { StyleSheet, TouchableOpacity } from 'react-native';
-import { AppText } from '../Text';
+import { AppText } from '../../Text';
 
 import { ChevronDown, ChevronUp } from '@/assets/icons/icon';
-import { ThemedView } from '../themed-view';
+import { ThemedView } from '../../themed-view';
 
 export function FeedCollapsible({ children }: { children: ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);

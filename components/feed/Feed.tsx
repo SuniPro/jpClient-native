@@ -1,5 +1,6 @@
+import { FeedContents } from '@/components/feed/contentsLine';
 import { View } from 'react-native';
-import { FeedContents } from './contents';
+import { FunctionLine } from './functionLine/FunctionLine';
 import { InfoLine } from './infoLine';
 
 export default function Feed() {
@@ -7,6 +8,7 @@ export default function Feed() {
     <View style={{ width: '100%' }}>
       <InfoLine></InfoLine>
       <FeedContents></FeedContents>
+      <FunctionLine></FunctionLine>
     </View>
   );
 }

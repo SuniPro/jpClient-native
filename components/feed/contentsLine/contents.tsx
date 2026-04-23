@@ -1,7 +1,8 @@
 import { StyleSheet, View } from 'react-native';
-import { FeedCarousel } from '../Carousel';
-import { AppText } from '../Text';
-import { FeedCollapsible } from './collapsible';
+import { FeedCarousel } from '../../Carousel';
+import { AppText } from '../../Text';
+import { feedLineStyle } from '../style';
+import { FeedCollapsible } from './FeedCollapsible';
 
 export function FeedContents() {
   return (
@@ -15,7 +16,7 @@ export function FeedContents() {
 
 export function Title() {
   return (
-    <View>
+    <View style={feedLineStyle.lineContainer}>
       <AppText variant="title3" color="primary">
         픽업 케이크 맛집 !
       </AppText>
@@ -31,19 +32,21 @@ export function Contents() {
         { id: '2', image: 'https://picsum.photos/800/400?2' },
         { id: '3', image: 'https://picsum.photos/800/400?3' },
       ]}
-    ></FeedCarousel>
+    />
   );
 }
 
 export function Detail() {
   return (
-    <FeedCollapsible>
-      <AppText color="primary" variant="body2">
-        특별한 날에 어울리는 주문 제작 케이크 맛집을 찾아왔어요~~ 색부터 맛있어 보이죠? 눈으로 먹고
-        입으로 먹고... 쓰다보니까 나도 케이크 먹고싶다 dummytext dummytext 당떨어져 작업하기시러
-        어쩌구저쩌구 꼭 가보세유
-      </AppText>
-    </FeedCollapsible>
+    <View style={[feedLineStyle.lineContainer, { paddingTop: 5, paddingBottom: 10 }]}>
+      <FeedCollapsible>
+        <AppText color="primary" variant="body2">
+          특별한 날에 어울리는 주문 제작 케이크 맛집을 찾아왔어요~~ 색부터 맛있어 보이죠? 눈으로
+          먹고 입으로 먹고... 쓰다보니까 나도 케이크 먹고싶다 dummytext dummytext 당떨어져
+          작업하기시러 어쩌구저쩌구 꼭 가보세유
+        </AppText>
+      </FeedCollapsible>
+    </View>
   );
 }
 

@@ -1,3 +1,4 @@
+import { useTheme } from '@/theme';
 import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
@@ -33,7 +34,7 @@ type DotConfig = {
 const HEART_PATH =
   'M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z';
 
-export function LikeButton({
+export default function LikeButton({
   width = 40,
   height = 40,
   initialLiked = false,
@@ -41,6 +42,8 @@ export function LikeButton({
   onChangeLiked,
 }: LikeButtonProps) {
   const [liked, setLiked] = useState(initialLiked);
+
+  const theme = useTheme();
 
   const size = Math.min(width, height);
   const iconSize = size * 0.72;
@@ -81,7 +84,11 @@ export function LikeButton({
   }));
 
   const heartAnimatedProps = useAnimatedProps(() => {
-    const stroke = interpolateColor(heartProgress.value, [0, 1], ['#696969', '#E2264D']);
+    const stroke = interpolateColor(
+      heartProgress.value,
+      [0, 1],
+      [theme.colors.iconDefault, '#E2264D'],
+    );
 
     const fill = interpolateColor(
       heartProgress.value,
@@ -175,7 +182,7 @@ export function LikeButton({
           <AnimatedPath
             animatedProps={heartAnimatedProps}
             d={HEART_PATH}
-            strokeWidth={1.8}
+            strokeWidth={2}
             strokeLinejoin="round"
           />
         </Svg>

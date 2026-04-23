@@ -26,7 +26,7 @@ export const lightTheme: AppTheme = {
     backgroundSystemNotice: palette.orange50,
     backgroundSystemNegative: palette.red50,
 
-    textPrimary: palette.gray900,
+    textPrimary: palette.black,
     textSecondary: palette.gray700,
     textTertiary: palette.gray500,
     textPlaceholder: palette.gray300,

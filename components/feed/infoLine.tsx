@@ -5,7 +5,7 @@ import { AppText } from '../Text';
 
 export function InfoLine() {
   return (
-    <View style={containerStyles.infoContainer}>
+    <View style={[containerStyles.infoContainer]}>
       <Avatar size="sm" />
       <View style={containerStyles.profileContainer}>
         <Profile></Profile>
@@ -80,6 +80,8 @@ const containerStyles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     boxSizing: 'border-box',
+    paddingRight: 10,
+    paddingLeft: 10,
   },
   profileContainer: {
     flex: 1,
