@@ -1,0 +1,538 @@
+{
+  "cities": [
+    {
+      "id": "sydney",
+      "name": "Sydney",
+      "country": "Australia",
+      "lat": -33.8688,
+      "lng": 151.2093,
+      "buildings": 6,
+      "heightBias": 0.01,
+      "labelPriority": 10,
+      "level": 6
+    },
+    {
+      "id": "melbourne",
+      "name": "Melbourne",
+      "country": "Australia",
+      "lat": -37.8136,
+      "lng": 144.9631,
+      "buildings": 5,
+      "heightBias": 0.009,
+      "labelPriority": 8,
+      "level": 6
+    },
+    {
+      "id": "auckland",
+      "name": "Auckland",
+      "country": "New Zealand",
+      "lat": -36.8509,
+      "lng": 174.7645,
+      "buildings": 5,
+      "heightBias": 0.008,
+      "level": 2
+    },
+    {
+      "id": "queenstown",
+      "name": "Queenstown",
+      "country": "New Zealand",
+      "lat": -45.0312,
+      "lng": 168.6626,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "level": 3
+    },
+    {
+      "id": "suva",
+      "name": "Suva",
+      "country": "Fiji",
+      "lat": -18.1248,
+      "lng": 178.4501,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 1
+    },
+    {
+      "id": "nadi",
+      "name": "Nadi",
+      "country": "Fiji",
+      "lat": -17.7765,
+      "lng": 177.435,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 2
+    },
+    {
+      "id": "portmoresby",
+      "name": "Port Moresby",
+      "country": "Papua New Guinea",
+      "lat": -9.4438,
+      "lng": 147.1803,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "level": 1
+    },
+    {
+      "id": "noumea",
+      "name": "Noumea",
+      "country": "New Caledonia",
+      "lat": -22.2558,
+      "lng": 166.4505,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 1
+    },
+    {
+      "id": "portvila",
+      "name": "Port Vila",
+      "country": "Vanuatu",
+      "lat": -17.7333,
+      "lng": 168.3273,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 1
+    },
+    {
+      "id": "newyork",
+      "name": "New York",
+      "country": "United States of America",
+      "lat": 40.7128,
+      "lng": -74.006,
+      "buildings": 6,
+      "heightBias": 0.01,
+      "level": 8
+    },
+    {
+      "id": "losangeles",
+      "name": "Los Angeles",
+      "country": "United States of America",
+      "lat": 34.0522,
+      "lng": -118.2437,
+      "buildings": 6,
+      "heightBias": 0.01,
+      "level": 8
+    },
+    {
+      "id": "lasvegas",
+      "name": "Las Vegas",
+      "country": "United States of America",
+      "lat": 36.1699,
+      "lng": -115.1398,
+      "buildings": 5,
+      "heightBias": 0.009,
+      "level": 8
+    },
+    {
+      "id": "toronto",
+      "name": "Toronto",
+      "country": "Canada",
+      "lat": 43.6532,
+      "lng": -79.3832,
+      "buildings": 5,
+      "heightBias": 0.009,
+      "level": 6
+    },
+    {
+      "id": "vancouver",
+      "name": "Vancouver",
+      "country": "Canada",
+      "lat": 49.2827,
+      "lng": -123.1207,
+      "buildings": 5,
+      "heightBias": 0.009,
+      "level": 6
+    },
+    {
+      "id": "mexicocity",
+      "name": "Mexico City",
+      "country": "Mexico",
+      "lat": 19.4326,
+      "lng": -99.1332,
+      "buildings": 6,
+      "heightBias": 0.01,
+      "level": 5
+    },
+    {
+      "id": "cancun",
+      "name": "Cancun",
+      "country": "Mexico",
+      "lat": 21.1619,
+      "lng": -86.8515,
+      "buildings": 5,
+      "heightBias": 0.008,
+      "level": 1
+    },
+    {
+      "id": "guatemalacity",
+      "name": "Guatemala City",
+      "country": "Guatemala",
+      "lat": 14.6349,
+      "lng": -90.5069,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "level": 1
+    },
+    {
+      "id": "antiguaguatemala",
+      "name": "Antigua Guatemala",
+      "country": "Guatemala",
+      "lat": 14.5586,
+      "lng": -90.7295,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "level": 2
+    },
+    {
+      "id": "sansalvador",
+      "name": "San Salvador",
+      "country": "El Salvador",
+      "lat": 13.6929,
+      "lng": -89.2182,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 1
+    },
+    {
+      "id": "tegucigalpa",
+      "name": "Tegucigalpa",
+      "country": "Honduras",
+      "lat": 14.0723,
+      "lng": -87.1921,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 1
+    },
+    {
+      "id": "managua",
+      "name": "Managua",
+      "country": "Nicaragua",
+      "lat": 12.114,
+      "lng": -86.2362,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 2
+    },
+    {
+      "id": "sanjosecr",
+      "name": "San Jose",
+      "country": "Costa Rica",
+      "lat": 9.9281,
+      "lng": -84.0907,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 1
+    },
+    {
+      "id": "havana",
+      "name": "Havana",
+      "country": "Cuba",
+      "lat": 23.1136,
+      "lng": -82.3666,
+      "buildings": 5,
+      "heightBias": 0.007,
+      "level": 4
+    },
+    {
+      "id": "santodomingo",
+      "name": "Santo Domingo",
+      "country": "Dominican Rep.",
+      "lat": 18.4861,
+      "lng": -69.9312,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 2
+    },
+    {
+      "id": "puntacana",
+      "name": "Punta Cana",
+      "country": "Dominican Rep.",
+      "lat": 18.5601,
+      "lng": -68.3725,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 1
+    },
+    {
+      "id": "bogota",
+      "name": "Bogota",
+      "country": "Colombia",
+      "lat": 4.711,
+      "lng": -74.0721,
+      "buildings": 5,
+      "heightBias": 0.008,
+      "level": 6
+    },
+    {
+      "id": "quito",
+      "name": "Quito",
+      "country": "Ecuador",
+      "lat": -0.1807,
+      "lng": -78.4678,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "level": 5
+    },
+    {
+      "id": "lima",
+      "name": "Lima",
+      "country": "Peru",
+      "lat": -12.0464,
+      "lng": -77.0428,
+      "buildings": 5,
+      "heightBias": 0.008,
+      "level": 2
+    },
+    {
+      "id": "cusco",
+      "name": "Cusco",
+      "country": "Peru",
+      "lat": -13.5319,
+      "lng": -71.9675,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "level": 1
+    },
+    {
+      "id": "riodejaneiro",
+      "name": "Rio de Janeiro",
+      "country": "Brazil",
+      "lat": -22.9068,
+      "lng": -43.1729,
+      "buildings": 5,
+      "heightBias": 0.008,
+      "level": 3
+    },
+    {
+      "id": "saopaulo",
+      "name": "Sao Paulo",
+      "country": "Brazil",
+      "lat": -23.5558,
+      "lng": -46.6396,
+      "buildings": 6,
+      "heightBias": 0.009,
+      "level": 4
+    },
+    {
+      "id": "buenosaires",
+      "name": "Buenos Aires",
+      "country": "Argentina",
+      "lat": -34.6037,
+      "lng": -58.3816,
+      "buildings": 5,
+      "heightBias": 0.008,
+      "level": 2
+    },
+    {
+      "id": "santiago",
+      "name": "Santiago",
+      "country": "Chile",
+      "lat": -33.4489,
+      "lng": -70.6693,
+      "buildings": 5,
+      "heightBias": 0.008,
+      "level": 5
+    },
+    {
+      "id": "paris",
+      "name": "Paris",
+      "country": "France",
+      "lat": 48.8566,
+      "lng": 2.3522,
+      "buildings": 6,
+      "heightBias": 0.01,
+      "level": 8
+    },
+    {
+      "id": "nice",
+      "name": "Nice",
+      "country": "France",
+      "lat": 43.7102,
+      "lng": 7.262,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "level": 6
+    },
+    {
+      "id": "lisbon",
+      "name": "Lisbon",
+      "country": "Portugal",
+      "lat": 38.7223,
+      "lng": -9.1393,
+      "buildings": 5,
+      "heightBias": 0.008,
+      "level": 8
+    },
+    {
+      "id": "porto",
+      "name": "Porto",
+      "country": "Portugal",
+      "lat": 41.1579,
+      "lng": -8.6291,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "level": 8
+    },
+    {
+      "id": "copenhagen",
+      "name": "Copenhagen",
+      "country": "Denmark",
+      "lat": 55.6761,
+      "lng": 12.5683,
+      "buildings": 5,
+      "heightBias": 0.008,
+      "level": 5
+    },
+    {
+      "id": "stockholm",
+      "name": "Stockholm",
+      "country": "Sweden",
+      "lat": 59.3293,
+      "lng": 18.0686,
+      "buildings": 5,
+      "heightBias": 0.008,
+      "level": 5
+    },
+    {
+      "id": "tallinn",
+      "name": "Tallinn",
+      "country": "Estonia",
+      "lat": 59.437,
+      "lng": 24.7536,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "level": 4
+    },
+    {
+      "id": "luxembourgcity",
+      "name": "Luxembourg City",
+      "country": "Luxembourg",
+      "lat": 49.6116,
+      "lng": 6.1319,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "level": 4
+    },
+    {
+      "id": "tokyo",
+      "name": "Tokyo",
+      "country": "Japan",
+      "lat": 35.6762,
+      "lng": 139.6503,
+      "buildings": 6,
+      "heightBias": 0.01,
+      "labelPriority": 10,
+      "level": 8
+    },
+    {
+      "id": "osaka",
+      "name": "Osaka",
+      "country": "Japan",
+      "lat": 34.6937,
+      "lng": 135.5023,
+      "buildings": 5,
+      "heightBias": 0.009,
+      "level": 8
+    },
+    {
+      "id": "jakarta",
+      "name": "Jakarta",
+      "country": "Indonesia",
+      "lat": -6.2088,
+      "lng": 106.8456,
+      "buildings": 6,
+      "heightBias": 0.009,
+      "level": 4
+    },
+    {
+      "id": "bali",
+      "name": "Denpasar",
+      "country": "Indonesia",
+      "lat": -8.65,
+      "lng": 115.2167,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "level": 6
+    },
+    {
+      "id": "vientiane",
+      "name": "Vientiane",
+      "country": "Laos",
+      "lat": 17.9757,
+      "lng": 102.6331,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 2
+    },
+    {
+      "id": "luangprabang",
+      "name": "Luang Prabang",
+      "country": "Laos",
+      "lat": 19.8856,
+      "lng": 102.1347,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 2
+    },
+    {
+      "id": "phnompenh",
+      "name": "Phnom Penh",
+      "country": "Cambodia",
+      "lat": 11.5564,
+      "lng": 104.9282,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 2
+    },
+    {
+      "id": "siemreap",
+      "name": "Siem Reap",
+      "country": "Cambodia",
+      "lat": 13.3671,
+      "lng": 103.8448,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 4
+    },
+    {
+      "id": "kualalumpur",
+      "name": "Kuala Lumpur",
+      "country": "Malaysia",
+      "lat": 3.139,
+      "lng": 101.6869,
+      "buildings": 5,
+      "heightBias": 0.008,
+      "level": 4
+    },
+    {
+      "id": "penang",
+      "name": "George Town",
+      "country": "Malaysia",
+      "lat": 5.4141,
+      "lng": 100.3288,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "labelPriority": 8,
+      "level": 2
+    },
+    {
+      "id": "ulaanbaatar",
+      "name": "Ulaanbaatar",
+      "country": "Mongolia",
+      "lat": 47.8864,
+      "lng": 106.9057,
+      "buildings": 4,
+      "heightBias": 0.007,
+      "level": 2
+    },
+    {
+      "id": "dili",
+      "name": "Dili",
+      "country": "East Timor",
+      "lat": -8.5569,
+      "lng": 125.5603,
+      "buildings": 4,
+      "heightBias": 0.006,
+      "level": 1
+    }
+  ]
+}
