@@ -28,6 +28,15 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "사진과 동영상을 선택하기 위해 미디어 라이브러리 접근 권한이 필요합니다.",
+          "savePhotosPermission": "편집한 사진을 저장하기 위해 권한이 필요합니다.",
+          "isAccessMediaLocationEnabled": true,
+          "granularPermissions": ["photo", "video"]
+        }
+      ],
       "expo-router",
       [
         "expo-splash-screen",

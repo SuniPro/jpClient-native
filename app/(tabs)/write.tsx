@@ -1,5 +1,5 @@
-import { View } from 'react-native';
+import PostMediaPickerScreen from '@/components/gallery/Edit';
 
 export default function WriteScreen() {
-  return <View></View>;
+  return <PostMediaPickerScreen></PostMediaPickerScreen>;
 }
