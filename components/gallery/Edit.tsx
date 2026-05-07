@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { Image } from 'expo-image';
-import JpMediaThumbnails, { ThumbnailQuality } from '@/modules/jp-media-thumbnails';
+import JpMediaThumbnails from '@/modules/jp-media-thumbnails';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText } from '../Text';
 import { AlbumMenuItem, MediaBucketKey, PickerAlbum, PickerAsset } from './types';
@@ -23,8 +23,7 @@ const CELL_SIZE = Math.floor(SCREEN_WIDTH / NUM_COLUMNS);
 const INITIAL_LOAD_COUNT = 80;
 const PAGINATION_LOAD_COUNT = 80;
 
-const FULL_FAST_BATCH_SIZE = 128;
-const FULL_HIGH_BATCH_SIZE = 80;
+const THUMBNAIL_SYNC_BATCH_SIZE = 120;
 
 const ALBUM_MENU: AlbumMenuItem[] = [
   { key: 'recent', label: '최근 항목' },
@@ -155,17 +154,19 @@ export default function PostMediaPickerScreen() {
   const loadingRef = useRef(false);
   const loadingMoreRef = useRef(false);
 
-  const fullFastIndexRef = useRef(0);
-  const fullHighIndexRef = useRef(0);
-
-  const fullFastRunningRef = useRef(false);
-  const fullHighRunningRef = useRef(false);
-
-  const fullFastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const fullHighTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const autoPagingRunningRef = useRef(false);
   const autoPagingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** assets length 와 thumbnail 들을 동기화 하기 위한 ref
+   * 전체 asset 배열을 JS가 배치 단위로 순회할 때, 다음에 검사할 시작 위치를 기억하는 인덱스
+   * */
+  const thumbnailSyncIndexRef = useRef(0);
+  /** assets length 와 thumbnail 들을 동기화 하기 위한 ref
+   * running 은 현재 sync 가 동작하고 있는 지를 뜻합니다.
+   * */
+  const thumbnailSyncRunningRef = useRef(false);
+
+  const thumbnailSyncStoppedRef = useRef(false);
 
   /**
    * 렌더링 초기에 사용되는 함수들입니다.
@@ -254,56 +255,109 @@ export default function PostMediaPickerScreen() {
     });
   }, []);
 
-  /**
-   * 품질별 batch 요청 함수.
-   * - fast / high를 따로 요청
-   * - 이미 받은 품질은 다시 요청하지 않음
-   */
-  const ensureThumbnailsByQuality = useCallback(
-    async (assetIds: string[], quality: ThumbnailQuality) => {
-      const mapRef = quality === 'high' ? highThumbnailMapRef : fastThumbnailMapRef;
-      const loadingSetRef = quality === 'high' ? highThumbnailLoadingRef : fastThumbnailLoadingRef;
+  const isThumbnailSyncComplete = useCallback(() => {
+    if (hasNextPage) return false;
+    if (assets.length === 0) return false;
 
-      const targetIds = Array.from(new Set(assetIds)).filter((id) => {
-        if (mapRef.current.has(id)) return false;
-        return !loadingSetRef.current.has(id);
-      });
+    return assets.every((item) => highThumbnailMapRef.current.has(item.id));
+  }, [assets, hasNextPage]);
 
-      console.log(`[ensureThumbnailsByQuality:${quality}] assetIds=`, assetIds);
-      console.log(`[ensureThumbnailsByQuality:${quality}] targetIds=`, targetIds);
+  const syncCachedThumbnails = useCallback(async () => {
+    if (assets.length === 0) return;
+    if (thumbnailSyncRunningRef.current) return;
+    if (thumbnailSyncStoppedRef.current) return;
 
-      if (targetIds.length === 0) return;
+    if (isThumbnailSyncComplete()) {
+      thumbnailSyncStoppedRef.current = true;
+      return;
+    }
 
-      targetIds.forEach((id) => loadingSetRef.current.add(id));
+    thumbnailSyncRunningRef.current = true;
 
-      try {
-        const result = await JpMediaThumbnails.getThumbnailBatch(targetIds, {
-          width: CELL_SIZE,
-          height: CELL_SIZE,
-          quality,
-        });
+    try {
+      // 시작 지점은 현재까지 진행한 assets index 의 번호가 저장됩니다.
+      const start = thumbnailSyncIndexRef.current;
 
-        console.log(`[ensureThumbnailsByQuality:${quality}] result keys=`, Object.keys(result));
+      // 시작 지점에 @THUMBNAIL_SYNC_BATCH_SIZE 를 더한 값과 assets.length 중 최소값을 계산하여,
+      // polling 이 진행 중이면, 당연히 첫번째 파라미터로 end 값이 정해집니다.
+      // 만약 현재 진행중인 index 와 THUMBNAIL_SYNC_BATCH_SIZE 더한 값이 더 큰 경우 assets.lenght 의 마지막이 end로 설정됩니다.
+      const end = Math.min(start + THUMBNAIL_SYNC_BATCH_SIZE, assets.length);
 
-        const entries = targetIds.map((id) => {
-          const uri = result[id] ?? null;
+      // 배치 전체가 아닌 high로 끝난 항목은 건너뛰게 설계합니다.
+      // 이미 high 까지 종료된 것은 polling 대상에서 제외
+      const targetIds = assets
+        .slice(start, end)
+        // 만약 이미 high 퀄리티로 저장된 값이면 target 에서 제외합니다.
+        .filter((item) => {
+          return !highThumbnailMapRef.current.has(item.id);
+        })
+        .map((item) => item.id);
 
-          if (uri) {
-            mapRef.current.set(id, uri);
+      // 이번 배치 구간에서 동기화할 대상이 없으면,
+      // 현재 구간은 이미 high 반영이 끝났다고 보고 다음 구간으로 넘어갑니다.
+      // 마지막 구간까지 왔다면 다시 0부터 순회합니다.
+      // swift 는 비동기적으로 작업을 진행하기 때문에 미 처리된 구간을 탐색하기 위해서 0 부터 순회하는 것입니다.
+      if (targetIds.length === 0) {
+        if (end >= assets.length) {
+          thumbnailSyncIndexRef.current = 0;
+        } else {
+          thumbnailSyncIndexRef.current = end;
+        }
+        return;
+      }
+
+      const entries = await Promise.all(
+        targetIds.map(async (id) => {
+          const high = await JpMediaThumbnails.getCachedThumbnail(id, {
+            width: CELL_SIZE,
+            height: CELL_SIZE,
+            quality: 'high',
+          });
+
+          if (high) {
+            // JS 쪽에서도 이 asset이 이미 high 썸네일까지 반영된 상태임을 기억합니다.
+            // 이렇게 저장해두면 이후 배치 순회에서 이 id를 다시 조회하지 않아도 되어,
+            // 불필요한 getCachedThumbnail 호출과 추가 연산을 줄일 수 있습니다.
+            highThumbnailMapRef.current.set(id, high);
+            return { id, uri: high };
           }
 
-          return { id, uri };
-        });
+          const fast = await JpMediaThumbnails.getCachedThumbnail(id, {
+            width: CELL_SIZE,
+            height: CELL_SIZE,
+            quality: 'fast',
+          });
 
-        patchThumbnailUris(entries);
-      } catch (error) {
-        console.log(`[thumb][batch:${quality}] failed`, error);
-      } finally {
-        targetIds.forEach((id) => loadingSetRef.current.delete(id));
+          if (fast) {
+            // fast 썸네일도 JS 메모리 맵에 반영해둡니다.
+            // 이후 high 가 오기 전까지 현재 상태를 빠르게 재사용할 수 있습니다.
+            fastThumbnailMapRef.current.set(id, fast);
+          }
+
+          return { id, uri: fast ?? null };
+        }),
+      );
+
+      patchThumbnailUris(entries);
+
+      if (!hasNextPage && assets.length > 0) {
+        const done = assets.every((item) => highThumbnailMapRef.current.has(item.id));
+        if (done) {
+          thumbnailSyncStoppedRef.current = true;
+        }
       }
-    },
-    [patchThumbnailUris],
-  );
+
+      if (end >= assets.length) {
+        thumbnailSyncIndexRef.current = 0;
+      } else {
+        thumbnailSyncIndexRef.current = end;
+      }
+    } catch (error) {
+      console.error(error);
+    } finally {
+      thumbnailSyncRunningRef.current = false;
+    }
+  }, [assets, patchThumbnailUris, isThumbnailSyncComplete, hasNextPage]);
 
   /** 어떤 사진들이 있는지 가져오는 함수입니다.
    *
@@ -399,23 +453,13 @@ export default function PostMediaPickerScreen() {
 
   /** 앨범 혹은 기타 사유에 의해 reset 될 경우 진행해야하는 reset 로직 모음입니다. */
   const resetPickerSession = () => {
+    try {
+      JpMediaThumbnails.stopPreloading();
+    } catch (error) {
+      // noop
+    }
+
     endCursorRef.current = null;
-
-    fullFastIndexRef.current = 0;
-    fullHighIndexRef.current = 0;
-
-    if (fullFastTimerRef.current) {
-      clearTimeout(fullFastTimerRef.current);
-      fullFastTimerRef.current = null;
-    }
-
-    if (fullHighTimerRef.current) {
-      clearTimeout(fullHighTimerRef.current);
-      fullHighTimerRef.current = null;
-    }
-
-    fullFastRunningRef.current = false;
-    fullHighRunningRef.current = false;
 
     fastThumbnailMapRef.current.clear();
     highThumbnailMapRef.current.clear();
@@ -429,125 +473,15 @@ export default function PostMediaPickerScreen() {
     }
     autoPagingRunningRef.current = false;
 
+    thumbnailSyncIndexRef.current = 0;
+    thumbnailSyncRunningRef.current = false;
+
+    thumbnailSyncStoppedRef.current = false;
+
     setAssets([]);
     setSelectedIds([]);
     setHasNextPage(true);
   };
-
-  const hasPendingFastThumbnails = useCallback(() => {
-    return assets.some((asset) => {
-      if (!asset) return false;
-      if (fastThumbnailMapRef.current.has(asset.id)) return false;
-      return !fastThumbnailLoadingRef.current.has(asset.id);
-    });
-  }, [assets]);
-
-  const hasPendingHighThumbnails = useCallback(() => {
-    return assets.some((asset) => {
-      if (!asset) return false;
-      if (!fastThumbnailMapRef.current.has(asset.id)) return false;
-      if (highThumbnailMapRef.current.has(asset.id)) return false;
-      return !highThumbnailLoadingRef.current.has(asset.id);
-    });
-  }, [assets]);
-
-  const scheduleFullFastPreload = useCallback(() => {
-    if (fullFastTimerRef.current) {
-      clearTimeout(fullFastTimerRef.current);
-    }
-
-    fullFastTimerRef.current = setTimeout(async () => {
-      if (fullFastRunningRef.current) return;
-      if (assets.length === 0) return;
-
-      fullFastRunningRef.current = true;
-
-      try {
-        const candidates: string[] = [];
-        let index = fullFastIndexRef.current;
-
-        while (index < assets.length && candidates.length < FULL_FAST_BATCH_SIZE) {
-          const asset = assets[index];
-          index += 1;
-
-          if (!asset) continue;
-          if (fastThumbnailMapRef.current.has(asset.id)) continue;
-          if (fastThumbnailLoadingRef.current.has(asset.id)) continue;
-
-          candidates.push(asset.id);
-        }
-
-        fullFastIndexRef.current = index;
-
-        if (candidates.length > 0) {
-          console.log('[full fast] candidates=', candidates.length);
-          await ensureThumbnailsByQuality(candidates, 'fast');
-        }
-
-        // 끝까지 갔으면 처음으로 돌아가서 혹시 남은 누락분 재확인
-        if (fullFastIndexRef.current >= assets.length) {
-          fullFastIndexRef.current = 0;
-        }
-
-        // reset 전까지, 아직 남은 fast가 있으면 계속 진행
-        if (hasPendingFastThumbnails()) {
-          scheduleFullFastPreload();
-        }
-      } finally {
-        fullFastRunningRef.current = false;
-      }
-    }, 80);
-  }, [assets, ensureThumbnailsByQuality, hasPendingFastThumbnails]);
-
-  const scheduleFullHighPreload = useCallback(() => {
-    if (fullHighTimerRef.current) {
-      clearTimeout(fullHighTimerRef.current);
-    }
-
-    fullHighTimerRef.current = setTimeout(async () => {
-      if (fullHighRunningRef.current) return;
-      if (assets.length === 0) return;
-
-      fullHighRunningRef.current = true;
-
-      try {
-        const candidates: string[] = [];
-        let index = fullHighIndexRef.current;
-
-        while (index < assets.length && candidates.length < FULL_HIGH_BATCH_SIZE) {
-          const asset = assets[index];
-          index += 1;
-
-          if (!asset) continue;
-
-          // fast가 없는 건 아직 high 승격 대상 아님
-          if (!fastThumbnailMapRef.current.has(asset.id)) continue;
-
-          if (highThumbnailMapRef.current.has(asset.id)) continue;
-          if (highThumbnailLoadingRef.current.has(asset.id)) continue;
-
-          candidates.push(asset.id);
-        }
-
-        fullHighIndexRef.current = index;
-
-        if (candidates.length > 0) {
-          console.log('[full high] candidates=', candidates.length);
-          await ensureThumbnailsByQuality(candidates, 'high');
-        }
-
-        if (fullHighIndexRef.current >= assets.length) {
-          fullHighIndexRef.current = 0;
-        }
-
-        if (hasPendingHighThumbnails()) {
-          scheduleFullHighPreload();
-        }
-      } finally {
-        fullHighRunningRef.current = false;
-      }
-    }, 180);
-  }, [assets, ensureThumbnailsByQuality, hasPendingHighThumbnails]);
 
   /**
    * 선택된 한 장은 고화질 우선.
@@ -611,15 +545,42 @@ export default function PostMediaPickerScreen() {
   }, [loadAlbums, loadAssets, requestPermission, resetAssetState]);
 
   useEffect(() => {
-    return () => {
-      if (fullFastTimerRef.current) {
-        clearTimeout(fullFastTimerRef.current);
-        fullFastTimerRef.current = null;
-      }
+    if (assets.length === 0) return;
 
-      if (fullHighTimerRef.current) {
-        clearTimeout(fullHighTimerRef.current);
-        fullHighTimerRef.current = null;
+    const assetIds = assets.map((item) => item.id);
+
+    JpMediaThumbnails.startPreloading(assetIds, {
+      width: CELL_SIZE,
+      height: CELL_SIZE,
+      fastBatchSize: 48,
+      highBatchSize: 12,
+    }).catch(() => {
+      // noop
+    });
+  }, [assets]);
+
+  useEffect(() => {
+    if (assets.length === 0) return;
+    if (thumbnailSyncStoppedRef.current) return;
+
+    syncCachedThumbnails().then();
+
+    const interval = setInterval(() => {
+      if (thumbnailSyncStoppedRef.current) return;
+      syncCachedThumbnails().then();
+    }, 400);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [assets, syncCachedThumbnails]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        JpMediaThumbnails.stopPreloading();
+      } catch (error) {
+        // noop
       }
 
       if (autoPagingTimerRef.current) {
@@ -638,21 +599,7 @@ export default function PostMediaPickerScreen() {
   }, [assets.length, hasNextPage, scheduleAutoPagination]);
 
   useEffect(() => {
-    if (assets.length === 0) return;
-
-    scheduleFullFastPreload();
-
-    const timeout = setTimeout(() => {
-      scheduleFullHighPreload();
-    }, 80);
-
-    return () => {
-      clearTimeout(timeout);
-    };
-  }, [assets, scheduleFullFastPreload, scheduleFullHighPreload]);
-
-  useEffect(() => {
-    bootstrap();
+    bootstrap().then();
   }, [bootstrap]);
 
   const applyBucket = useCallback(
@@ -712,7 +659,7 @@ export default function PostMediaPickerScreen() {
        * 사용자가 직접 탭한 셀은 고화질을 우선 확보.
        * preview를 다시 붙일 때도 그대로 재사용 가능.
        */
-      ensureSelectedThumbnailHighQuality(assetId);
+      ensureSelectedThumbnailHighQuality(assetId).then();
 
       if (!multiSelectEnabled) {
         setSelectedIds([assetId]);
@@ -862,17 +809,17 @@ export default function PostMediaPickerScreen() {
           maxToRenderPerBatch={24}
           updateCellsBatchingPeriod={16}
           windowSize={9}
-          removeClippedSubviews
+          removeClippedSubviews={false}
           onEndReachedThreshold={0.15}
           onEndReached={onEndReached}
-          getItemLayout={(_, index) => {
-            const row = Math.floor(index / NUM_COLUMNS);
-            return {
-              length: CELL_SIZE,
-              offset: CELL_SIZE * row,
-              index,
-            };
-          }}
+          // getItemLayout={(_, index) => {
+          //   const row = Math.floor(index / NUM_COLUMNS);
+          //   return {
+          //     length: CELL_SIZE,
+          //     offset: CELL_SIZE * row,
+          //     index,
+          //   };
+          // }}
           ListFooterComponent={
             loading ? (
               <View style={styles.footerLoading}>
