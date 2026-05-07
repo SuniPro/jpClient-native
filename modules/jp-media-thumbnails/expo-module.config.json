@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android", "web"],
+  "apple": {
+    "modules": ["JpMediaThumbnailsModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.jpmediathumbnails.JpMediaThumbnailsModule"]
+  }
+}

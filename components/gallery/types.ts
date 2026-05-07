@@ -29,9 +29,15 @@ export type EditorDraft = {
 
 export type MediaBucketKey = 'recent' | 'videos' | 'favorites' | 'albums';
 
+/**
+ * FlatList 의 Image 태그를 이루는 핵심 타입입니다.
+ *
+ * photo, video 타입으로 구분됩니다.
+ * */
 export type PickerAsset = {
   id: string;
   uri: string;
+  thumbnailUri?: string | null;
   mediaType: 'photo' | 'video';
   width: number;
   height: number;
