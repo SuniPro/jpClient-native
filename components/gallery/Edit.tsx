@@ -1,4 +1,6 @@
 import * as MediaLibrary from 'expo-media-library';
+import type { EventSubscription } from 'expo-modules-core';
+import JpMediaThumbnails from '@/modules/jp-media-thumbnails';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -11,7 +13,6 @@ import {
   View,
 } from 'react-native';
 import { Image } from 'expo-image';
-import JpMediaThumbnails from '@/modules/jp-media-thumbnails';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText } from '../Text';
 import { AlbumMenuItem, MediaBucketKey, PickerAlbum, PickerAsset } from './types';
@@ -156,6 +157,8 @@ export default function PostMediaPickerScreen() {
 
   const autoPagingRunningRef = useRef(false);
   const autoPagingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const lastPreloadAssetsLengthRef = useRef(0);
 
   /** assets length 와 thumbnail 들을 동기화 하기 위한 ref
    * 전체 asset 배열을 JS가 배치 단위로 순회할 때, 다음에 검사할 시작 위치를 기억하는 인덱스
@@ -543,6 +546,104 @@ export default function PostMediaPickerScreen() {
       setBootstrapping(false);
     }
   }, [loadAlbums, loadAssets, requestPermission, resetAssetState]);
+
+  useEffect(() => {
+    console.log('[thumbnail event] subscribe mounted');
+
+    const subscription = JpMediaThumbnails.addListener('onThumbnailReady', (event) => {
+      console.log('[thumbnail event] received raw', event);
+    });
+
+    return () => {
+      console.log('[thumbnail event] subscribe removed');
+      subscription.remove();
+    };
+  }, []);
+
+  const debugCheckedRef = useRef(false);
+
+  useEffect(() => {
+    if (assets.length === 0) return;
+    if (debugCheckedRef.current) return;
+
+    const firstId = assets[0]?.id;
+    if (!firstId) return;
+
+    debugCheckedRef.current = true;
+
+    (async () => {
+      try {
+        const fast = await JpMediaThumbnails.getCachedThumbnail(firstId, {
+          width: CELL_SIZE,
+          height: CELL_SIZE,
+          quality: 'fast',
+        });
+
+        const high = await JpMediaThumbnails.getCachedThumbnail(firstId, {
+          width: CELL_SIZE,
+          height: CELL_SIZE,
+          quality: 'high',
+        });
+
+        console.log('[debug cached thumbnail]', {
+          firstId,
+          fast,
+          high,
+        });
+      } catch (error) {
+        console.log('[debug cached thumbnail] failed', error);
+      }
+    })();
+  }, [assets.length]);
+
+  useEffect(() => {
+    if (assets.length === 0) return;
+    if (assets.length === lastPreloadAssetsLengthRef.current) return;
+
+    lastPreloadAssetsLengthRef.current = assets.length;
+
+    const assetIds = assets.map((item) => item.id);
+
+    console.log('[startPreloading] assetIds.length =', assetIds.length);
+
+    JpMediaThumbnails.startPreloading(assetIds, {
+      width: CELL_SIZE,
+      height: CELL_SIZE,
+      fastBatchSize: 48,
+      highBatchSize: 12,
+    })
+      .then(() => {
+        console.log('[startPreloading] resolved');
+      })
+      .catch((error) => {
+        console.log('[startPreloading] failed', error);
+      });
+  }, [assets.length]);
+
+  useEffect(() => {
+    console.log('[thumbnail event] subscribe');
+    console.log('[has addListener]', typeof JpMediaThumbnails.addListener);
+
+    const subscription: EventSubscription = JpMediaThumbnails.addListener(
+      'onThumbnailReady',
+      ({ assetId, quality, uri }) => {
+        console.log('[onThumbnailReady]', assetId, quality, uri);
+        if (!uri) return;
+
+        if (quality === 'high') {
+          highThumbnailMapRef.current.set(assetId, uri);
+        } else {
+          fastThumbnailMapRef.current.set(assetId, uri);
+        }
+
+        patchThumbnailUris([{ id: assetId, uri }]);
+      },
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [patchThumbnailUris]);
 
   useEffect(() => {
     if (assets.length === 0) return;

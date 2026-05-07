@@ -41,6 +41,7 @@ public class JpMediaThumbnailsModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("JpMediaThumbnails")
+    Events("onThumbnailReady")
 
     AsyncFunction("getThumbnail") { (assetId: String, options: [String: Any], promise: Promise) in
       let width = (options["width"] as? Double).map { CGFloat($0) } ?? 200
@@ -290,6 +291,7 @@ public class JpMediaThumbnailsModule: Module {
     quality: String,
     completion: @escaping (String?) -> Void
   ) {
+  print("NATIVE [thumb][request:start] assetId=\(assetId) quality=\(quality)")
     let scale = UIScreen.main.scale
     let cacheKey = makeMemoryCacheKey(
       assetId: assetId,
@@ -301,6 +303,13 @@ public class JpMediaThumbnailsModule: Module {
 
     // 1) Memory cache
     if let memoryUri = getMemoryCachedUri(for: cacheKey, quality: quality) {
+
+      print("NATIVE [thumb][memory-hit] assetId=\(assetId) quality=\(quality)")
+      self.sendEvent("onThumbnailReady", [
+        "assetId": assetId,
+        "quality": quality,
+        "uri": memoryUri
+      ])
       completion(memoryUri)
       return
     }
@@ -325,6 +334,14 @@ public class JpMediaThumbnailsModule: Module {
     // 2) Disk cache
     if FileManager.default.fileExists(atPath: fileURL.path) {
       setMemoryCachedUri(fileUri, for: cacheKey, quality: quality)
+
+        print("NATIVE [thumb][disk-hit] assetId=\(assetId) quality=\(quality)")
+        self.sendEvent("onThumbnailReady", [
+          "assetId": assetId,
+          "quality": quality,
+          "uri": fileUri
+        ])
+
       completion(fileUri)
       return
     }
@@ -392,6 +409,13 @@ public class JpMediaThumbnailsModule: Module {
       do {
         try data.write(to: fileURL, options: .atomic)
         self.setMemoryCachedUri(fileUri, for: cacheKey, quality: quality)
+print("NATIVE [thumb][sendEvent] assetId=\(assetId) quality=\(quality)")
+        self.sendEvent("onThumbnailReady", [
+          "assetId": assetId,
+          "quality": quality,
+          "uri": fileUri
+        ])
+
         self.resolvePendingCompletions(assetId: assetId, quality: quality, uri: fileUri)
       } catch {
         print("[JpMediaThumbnails] failed to write thumbnail file: \(error.localizedDescription)")
