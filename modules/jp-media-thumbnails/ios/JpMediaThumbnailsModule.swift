@@ -5,6 +5,8 @@ import UIKit
 public class JpMediaThumbnailsModule: Module {
   private let imageManager = PHCachingImageManager()
 
+  private let stateQueue = DispatchQueue(label: "jp.media.thumbnails.state")
+
   // MARK: - In-memory caches
   private var fastMemoryCache: [String: String] = [:]
   private var highMemoryCache: [String: String] = [:]
@@ -192,42 +194,52 @@ public class JpMediaThumbnailsModule: Module {
   }
 
   private func getMemoryCachedUri(for key: String, quality: String) -> String? {
-    if quality == "high" {
-      return highMemoryCache[key]
-    }
+    return stateQueue.sync {
+      if quality == "high" {
+        return highMemoryCache[key]
+      }
 
-    return fastMemoryCache[key]
+      return fastMemoryCache[key]
+    }
   }
 
   private func setMemoryCachedUri(_ uri: String, for key: String, quality: String) {
-    if quality == "high" {
-      highMemoryCache[key] = uri
-    } else {
-      fastMemoryCache[key] = uri
+    stateQueue.sync {
+      if quality == "high" {
+        highMemoryCache[key] = uri
+      } else {
+        fastMemoryCache[key] = uri
+      }
     }
   }
 
   private func isLoading(assetId: String, quality: String) -> Bool {
-    if quality == "high" {
-      return highLoadingIds.contains(assetId)
-    }
+    return stateQueue.sync {
+      if quality == "high" {
+        return highLoadingIds.contains(assetId)
+      }
 
-    return fastLoadingIds.contains(assetId)
+      return fastLoadingIds.contains(assetId)
+    }
   }
 
   private func markLoading(assetId: String, quality: String) {
-    if quality == "high" {
-      highLoadingIds.insert(assetId)
-    } else {
-      fastLoadingIds.insert(assetId)
+    stateQueue.sync {
+      if quality == "high" {
+        highLoadingIds.insert(assetId)
+      } else {
+        fastLoadingIds.insert(assetId)
+      }
     }
   }
 
   private func unmarkLoading(assetId: String, quality: String) {
-    if quality == "high" {
-      highLoadingIds.remove(assetId)
-    } else {
-      fastLoadingIds.remove(assetId)
+    stateQueue.sync {
+      if quality == "high" {
+        highLoadingIds.remove(assetId)
+      } else {
+        fastLoadingIds.remove(assetId)
+      }
     }
   }
 
@@ -238,14 +250,16 @@ public class JpMediaThumbnailsModule: Module {
     quality: String,
     completion: @escaping (String?) -> Void
   ) {
-    if quality == "high" {
-      var current = highPendingCompletions[assetId] ?? []
-      current.append(completion)
-      highPendingCompletions[assetId] = current
-    } else {
-      var current = fastPendingCompletions[assetId] ?? []
-      current.append(completion)
-      fastPendingCompletions[assetId] = current
+    stateQueue.sync {
+      if quality == "high" {
+        var current = highPendingCompletions[assetId] ?? []
+        current.append(completion)
+        highPendingCompletions[assetId] = current
+      } else {
+        var current = fastPendingCompletions[assetId] ?? []
+        current.append(completion)
+        fastPendingCompletions[assetId] = current
+      }
     }
   }
 
@@ -254,12 +268,12 @@ public class JpMediaThumbnailsModule: Module {
     quality: String,
     uri: String?
   ) {
-    let completions: [(String?) -> Void]
-
-    if quality == "high" {
-      completions = highPendingCompletions.removeValue(forKey: assetId) ?? []
-    } else {
-      completions = fastPendingCompletions.removeValue(forKey: assetId) ?? []
+    let completions: [(String?) -> Void] = stateQueue.sync {
+      if quality == "high" {
+        return highPendingCompletions.removeValue(forKey: assetId) ?? []
+      } else {
+        return fastPendingCompletions.removeValue(forKey: assetId) ?? []
+      }
     }
 
     for completion in completions {
@@ -351,15 +365,16 @@ public class JpMediaThumbnailsModule: Module {
       contentMode: .aspectFill,
       options: requestOptions
     ) { image, info in
+
+     defer {
+            self.unmarkLoading(assetId: assetId, quality: quality)
+        }
+
       let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
 
       // high 품질은 degraded 이미지를 무시하고 최종 선명본만 저장
       if quality == "high" && isDegraded {
         return
-      }
-
-      defer {
-        self.unmarkLoading(assetId: assetId, quality: quality)
       }
 
       guard let image else {
@@ -461,7 +476,33 @@ public class JpMediaThumbnailsModule: Module {
     )
   }
 
+  // MARK: - Preload helpers
+
+private func shouldStop() -> Bool {
+  return stateQueue.sync { shouldStopPreloading }
+}
+
   // MARK: - Preload engine
+
+private func getPreloadConfigSnapshot() -> (
+  assetIds: [String],
+  width: CGFloat,
+  height: CGFloat,
+  fastBatchSize: Int,
+  highBatchSize: Int,
+  shouldStop: Bool
+) {
+  return stateQueue.sync {
+    return (
+      assetIds: preloadAssetIds,
+      width: preloadWidth,
+      height: preloadHeight,
+      fastBatchSize: preloadFastBatchSize,
+      highBatchSize: preloadHighBatchSize,
+      shouldStop: shouldStopPreloading
+    )
+  }
+}
 
   private func startPreloading(
     assetIds: [String],
@@ -625,31 +666,127 @@ public class JpMediaThumbnailsModule: Module {
     return false
   }
 
-  private func scheduleFastPreload() {
-    if shouldStopPreloading { return }
-    if isPreloadingFast { return }
-    if preloadAssetIds.isEmpty { return }
+  // MARK: - StateQueue helpers for preload engine
 
-    isPreloadingFast = true
+  private func getPreloadSnapshot() -> (
+    assetIds: [String],
+    width: CGFloat,
+    height: CGFloat,
+    fastBatchSize: Int,
+    highBatchSize: Int,
+    shouldStop: Bool
+  ) {
+    return stateQueue.sync {
+      (
+        assetIds: preloadAssetIds,
+        width: preloadWidth,
+        height: preloadHeight,
+        fastBatchSize: preloadFastBatchSize,
+        highBatchSize: preloadHighBatchSize,
+        shouldStop: shouldStopPreloading
+      )
+    }
+  }
+
+  private func tryBeginFastPreload() -> Bool {
+    return stateQueue.sync {
+      if shouldStopPreloading { return false }
+      if isPreloadingFast { return false }
+      if preloadAssetIds.isEmpty { return false }
+
+      isPreloadingFast = true
+      return true
+    }
+  }
+
+  private func endFastPreload() {
+    stateQueue.sync {
+      isPreloadingFast = false
+    }
+  }
+
+  private func tryBeginHighPreload() -> Bool {
+    return stateQueue.sync {
+      if shouldStopPreloading { return false }
+      if isPreloadingHigh { return false }
+      if preloadAssetIds.isEmpty { return false }
+
+      isPreloadingHigh = true
+      return true
+    }
+  }
+
+  private func endHighPreload() {
+    stateQueue.sync {
+      isPreloadingHigh = false
+    }
+  }
+
+  private func getFastPreloadIndex() -> Int {
+    return stateQueue.sync { preloadFastIndex }
+  }
+
+  private func setFastPreloadIndex(_ index: Int) {
+    stateQueue.sync {
+      preloadFastIndex = index
+    }
+  }
+
+  private func getHighPreloadIndex() -> Int {
+    return stateQueue.sync { preloadHighIndex }
+  }
+
+  private func setHighPreloadIndex(_ index: Int) {
+    stateQueue.sync {
+      preloadHighIndex = index
+    }
+  }
+
+  private func getLastPreheatedFastIds() -> [String] {
+    return stateQueue.sync { lastPreheatedFastIds }
+  }
+
+  private func setLastPreheatedFastIds(_ ids: [String]) {
+    stateQueue.sync {
+      lastPreheatedFastIds = ids
+    }
+  }
+
+  private func getLastPreheatedHighIds() -> [String] {
+    return stateQueue.sync { lastPreheatedHighIds }
+  }
+
+  private func setLastPreheatedHighIds(_ ids: [String]) {
+    stateQueue.sync {
+      lastPreheatedHighIds = ids
+    }
+  }
+
+  // MARK: - Replace the two scheduler functions with these
+
+  private func scheduleFastPreload() {
+    guard tryBeginFastPreload() else { return }
 
     DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.05) {
-      if self.shouldStopPreloading {
-        self.isPreloadingFast = false
+      let snapshot = self.getPreloadSnapshot()
+
+      if snapshot.shouldStop {
+        self.endFastPreload()
         return
       }
 
       let scale = UIScreen.main.scale
       var batchIds: [String] = []
-      var index = self.preloadFastIndex
+      var index = self.getFastPreloadIndex()
 
-      while index < self.preloadAssetIds.count && batchIds.count < self.preloadFastBatchSize {
-        let assetId = self.preloadAssetIds[index]
+      while index < snapshot.assetIds.count && batchIds.count < snapshot.fastBatchSize {
+        let assetId = snapshot.assetIds[index]
         index += 1
 
         let cacheKey = self.makeMemoryCacheKey(
           assetId: assetId,
-          width: self.preloadWidth,
-          height: self.preloadHeight,
+          width: snapshot.width,
+          height: snapshot.height,
           scale: scale,
           quality: "fast"
         )
@@ -661,8 +798,8 @@ public class JpMediaThumbnailsModule: Module {
         do {
           let fileURL = try self.makeCacheFileURL(
             assetId: assetId,
-            width: self.preloadWidth,
-            height: self.preloadHeight,
+            width: snapshot.width,
+            height: snapshot.height,
             scale: scale,
             quality: "fast"
           )
@@ -683,14 +820,10 @@ public class JpMediaThumbnailsModule: Module {
         batchIds.append(assetId)
       }
 
-      self.preloadFastIndex = index
-
-      if self.preloadFastIndex >= self.preloadAssetIds.count {
-        self.preloadFastIndex = 0
-      }
+      self.setFastPreloadIndex(index >= snapshot.assetIds.count ? 0 : index)
 
       guard !batchIds.isEmpty else {
-        self.isPreloadingFast = false
+        self.endFastPreload()
 
         if self.hasPendingFastPreload() {
           self.scheduleFastPreload()
@@ -700,24 +833,25 @@ public class JpMediaThumbnailsModule: Module {
       }
 
       let preheatIds = Array(batchIds.prefix(min(batchIds.count, 60)))
+      let previousPreheatedIds = self.getLastPreheatedFastIds()
 
-      if !self.lastPreheatedFastIds.isEmpty {
+      if !previousPreheatedIds.isEmpty {
         self.stopCaching(
-          assetIds: self.lastPreheatedFastIds,
-          width: self.preloadWidth,
-          height: self.preloadHeight,
+          assetIds: previousPreheatedIds,
+          width: snapshot.width,
+          height: snapshot.height,
           quality: "fast"
         )
       }
 
       self.startCaching(
         assetIds: preheatIds,
-        width: self.preloadWidth,
-        height: self.preloadHeight,
+        width: snapshot.width,
+        height: snapshot.height,
         quality: "fast"
       )
 
-      self.lastPreheatedFastIds = preheatIds
+      self.setLastPreheatedFastIds(preheatIds)
 
       let dispatchGroup = DispatchGroup()
 
@@ -726,8 +860,8 @@ public class JpMediaThumbnailsModule: Module {
 
         self.requestThumbnail(
           assetId: assetId,
-          width: self.preloadWidth,
-          height: self.preloadHeight,
+          width: snapshot.width,
+          height: snapshot.height,
           quality: "fast"
         ) { _ in
           dispatchGroup.leave()
@@ -735,9 +869,10 @@ public class JpMediaThumbnailsModule: Module {
       }
 
       dispatchGroup.notify(queue: .main) {
-        self.isPreloadingFast = false
+        self.endFastPreload()
 
-        if self.hasPendingFastPreload() && !self.shouldStopPreloading {
+        let current = self.getPreloadSnapshot()
+        if self.hasPendingFastPreload() && !current.shouldStop {
           self.scheduleFastPreload()
         }
       }
@@ -745,30 +880,28 @@ public class JpMediaThumbnailsModule: Module {
   }
 
   private func scheduleHighPreload() {
-    if shouldStopPreloading { return }
-    if isPreloadingHigh { return }
-    if preloadAssetIds.isEmpty { return }
-
-    isPreloadingHigh = true
+    guard tryBeginHighPreload() else { return }
 
     DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.12) {
-      if self.shouldStopPreloading {
-        self.isPreloadingHigh = false
+      let snapshot = self.getPreloadSnapshot()
+
+      if snapshot.shouldStop {
+        self.endHighPreload()
         return
       }
 
       let scale = UIScreen.main.scale
       var batchIds: [String] = []
-      var index = self.preloadHighIndex
+      var index = self.getHighPreloadIndex()
 
-      while index < self.preloadAssetIds.count && batchIds.count < self.preloadHighBatchSize {
-        let assetId = self.preloadAssetIds[index]
+      while index < snapshot.assetIds.count && batchIds.count < snapshot.highBatchSize {
+        let assetId = snapshot.assetIds[index]
         index += 1
 
         let fastKey = self.makeMemoryCacheKey(
           assetId: assetId,
-          width: self.preloadWidth,
-          height: self.preloadHeight,
+          width: snapshot.width,
+          height: snapshot.height,
           scale: scale,
           quality: "fast"
         )
@@ -779,8 +912,8 @@ public class JpMediaThumbnailsModule: Module {
           do {
             let url = try self.makeCacheFileURL(
               assetId: assetId,
-              width: self.preloadWidth,
-              height: self.preloadHeight,
+              width: snapshot.width,
+              height: snapshot.height,
               scale: scale,
               quality: "fast"
             )
@@ -796,8 +929,8 @@ public class JpMediaThumbnailsModule: Module {
 
         let highKey = self.makeMemoryCacheKey(
           assetId: assetId,
-          width: self.preloadWidth,
-          height: self.preloadHeight,
+          width: snapshot.width,
+          height: snapshot.height,
           scale: scale,
           quality: "high"
         )
@@ -809,8 +942,8 @@ public class JpMediaThumbnailsModule: Module {
         do {
           let highURL = try self.makeCacheFileURL(
             assetId: assetId,
-            width: self.preloadWidth,
-            height: self.preloadHeight,
+            width: snapshot.width,
+            height: snapshot.height,
             scale: scale,
             quality: "high"
           )
@@ -831,14 +964,10 @@ public class JpMediaThumbnailsModule: Module {
         batchIds.append(assetId)
       }
 
-      self.preloadHighIndex = index
-
-      if self.preloadHighIndex >= self.preloadAssetIds.count {
-        self.preloadHighIndex = 0
-      }
+      self.setHighPreloadIndex(index >= snapshot.assetIds.count ? 0 : index)
 
       guard !batchIds.isEmpty else {
-        self.isPreloadingHigh = false
+        self.endHighPreload()
 
         if self.hasPendingHighPreload() {
           self.scheduleHighPreload()
@@ -848,24 +977,25 @@ public class JpMediaThumbnailsModule: Module {
       }
 
       let preheatIds = Array(batchIds.prefix(min(batchIds.count, 30)))
+      let previousPreheatedIds = self.getLastPreheatedHighIds()
 
-      if !self.lastPreheatedHighIds.isEmpty {
+      if !previousPreheatedIds.isEmpty {
         self.stopCaching(
-          assetIds: self.lastPreheatedHighIds,
-          width: self.preloadWidth,
-          height: self.preloadHeight,
+          assetIds: previousPreheatedIds,
+          width: snapshot.width,
+          height: snapshot.height,
           quality: "high"
         )
       }
 
       self.startCaching(
         assetIds: preheatIds,
-        width: self.preloadWidth,
-        height: self.preloadHeight,
+        width: snapshot.width,
+        height: snapshot.height,
         quality: "high"
       )
 
-      self.lastPreheatedHighIds = preheatIds
+      self.setLastPreheatedHighIds(preheatIds)
 
       let dispatchGroup = DispatchGroup()
 
@@ -874,8 +1004,8 @@ public class JpMediaThumbnailsModule: Module {
 
         self.requestThumbnail(
           assetId: assetId,
-          width: self.preloadWidth,
-          height: self.preloadHeight,
+          width: snapshot.width,
+          height: snapshot.height,
           quality: "high"
         ) { _ in
           dispatchGroup.leave()
@@ -883,9 +1013,10 @@ public class JpMediaThumbnailsModule: Module {
       }
 
       dispatchGroup.notify(queue: .main) {
-        self.isPreloadingHigh = false
+        self.endHighPreload()
 
-        if self.hasPendingHighPreload() && !self.shouldStopPreloading {
+        let current = self.getPreloadSnapshot()
+        if self.hasPendingHighPreload() && !current.shouldStop {
           self.scheduleHighPreload()
         }
       }
