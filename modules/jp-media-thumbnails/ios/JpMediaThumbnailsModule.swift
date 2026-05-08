@@ -4,8 +4,10 @@ import UIKit
 
 public class JpMediaThumbnailsModule: Module {
   private let imageManager = PHCachingImageManager()
-
   private let stateQueue = DispatchQueue(label: "jp.media.thumbnails.state")
+
+  // MARK: - Event observing state
+  private var isObservingThumbnailReady = false
 
   // MARK: - In-memory caches
   private var fastMemoryCache: [String: String] = [:]
@@ -21,16 +23,12 @@ public class JpMediaThumbnailsModule: Module {
 
   // MARK: - Preload engine state
   private var preloadAssetIds: [String] = []
-
   private var preloadWidth: CGFloat = 200
   private var preloadHeight: CGFloat = 200
-
   private var preloadFastBatchSize = 48
   private var preloadHighBatchSize = 12
-
   private var preloadFastIndex = 0
   private var preloadHighIndex = 0
-
   private var isPreloadingFast = false
   private var isPreloadingHigh = false
   private var shouldStopPreloading = false
@@ -42,6 +40,18 @@ public class JpMediaThumbnailsModule: Module {
   public func definition() -> ModuleDefinition {
     Name("JpMediaThumbnails")
     Events("onThumbnailReady")
+
+    OnStartObserving("onThumbnailReady") {
+      self.stateQueue.async {
+        self.isObservingThumbnailReady = true
+      }
+    }
+
+    OnStopObserving("onThumbnailReady") {
+      self.stateQueue.async {
+        self.isObservingThumbnailReady = false
+      }
+    }
 
     AsyncFunction("getThumbnail") { (assetId: String, options: [String: Any], promise: Promise) in
       let width = (options["width"] as? Double).map { CGFloat($0) } ?? 200
@@ -153,6 +163,21 @@ public class JpMediaThumbnailsModule: Module {
     }
   }
 
+  // MARK: - Event helpers
+
+  private func emitThumbnailReady(assetId: String, quality: String, uri: String) {
+    DispatchQueue.main.async {
+      let observing = self.stateQueue.sync { self.isObservingThumbnailReady }
+      guard observing else { return }
+
+      self.sendEvent("onThumbnailReady", [
+        "assetId": assetId,
+        "quality": quality,
+        "uri": uri
+      ])
+    }
+  }
+
   // MARK: - Cache helpers
 
   private func makeSafeAssetId(_ assetId: String) -> String {
@@ -199,7 +224,6 @@ public class JpMediaThumbnailsModule: Module {
       if quality == "high" {
         return highMemoryCache[key]
       }
-
       return fastMemoryCache[key]
     }
   }
@@ -219,7 +243,6 @@ public class JpMediaThumbnailsModule: Module {
       if quality == "high" {
         return highLoadingIds.contains(assetId)
       }
-
       return fastLoadingIds.contains(assetId)
     }
   }
@@ -291,7 +314,6 @@ public class JpMediaThumbnailsModule: Module {
     quality: String,
     completion: @escaping (String?) -> Void
   ) {
-  print("NATIVE [thumb][request:start] assetId=\(assetId) quality=\(quality)")
     let scale = UIScreen.main.scale
     let cacheKey = makeMemoryCacheKey(
       assetId: assetId,
@@ -301,15 +323,8 @@ public class JpMediaThumbnailsModule: Module {
       quality: quality
     )
 
-    // 1) Memory cache
     if let memoryUri = getMemoryCachedUri(for: cacheKey, quality: quality) {
-
-      print("NATIVE [thumb][memory-hit] assetId=\(assetId) quality=\(quality)")
-      self.sendEvent("onThumbnailReady", [
-        "assetId": assetId,
-        "quality": quality,
-        "uri": memoryUri
-      ])
+      emitThumbnailReady(assetId: assetId, quality: quality, uri: memoryUri)
       completion(memoryUri)
       return
     }
@@ -324,29 +339,19 @@ public class JpMediaThumbnailsModule: Module {
         quality: quality
       )
     } catch {
-      print("[JpMediaThumbnails] failed to create cache file url: \(error.localizedDescription)")
       completion(nil)
       return
     }
 
     let fileUri = fileURL.absoluteString
 
-    // 2) Disk cache
     if FileManager.default.fileExists(atPath: fileURL.path) {
       setMemoryCachedUri(fileUri, for: cacheKey, quality: quality)
-
-        print("NATIVE [thumb][disk-hit] assetId=\(assetId) quality=\(quality)")
-        self.sendEvent("onThumbnailReady", [
-          "assetId": assetId,
-          "quality": quality,
-          "uri": fileUri
-        ])
-
+      emitThumbnailReady(assetId: assetId, quality: quality, uri: fileUri)
       completion(fileUri)
       return
     }
 
-    // 3) Fan-out duplicate requests
     if isLoading(assetId: assetId, quality: quality) {
       appendPendingCompletion(assetId: assetId, quality: quality, completion: completion)
       return
@@ -382,14 +387,12 @@ public class JpMediaThumbnailsModule: Module {
       contentMode: .aspectFill,
       options: requestOptions
     ) { image, info in
-
-     defer {
-            self.unmarkLoading(assetId: assetId, quality: quality)
-        }
+      defer {
+        self.unmarkLoading(assetId: assetId, quality: quality)
+      }
 
       let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
 
-      // high 품질은 degraded 이미지를 무시하고 최종 선명본만 저장
       if quality == "high" && isDegraded {
         return
       }
@@ -409,16 +412,9 @@ public class JpMediaThumbnailsModule: Module {
       do {
         try data.write(to: fileURL, options: .atomic)
         self.setMemoryCachedUri(fileUri, for: cacheKey, quality: quality)
-print("NATIVE [thumb][sendEvent] assetId=\(assetId) quality=\(quality)")
-        self.sendEvent("onThumbnailReady", [
-          "assetId": assetId,
-          "quality": quality,
-          "uri": fileUri
-        ])
-
+        self.emitThumbnailReady(assetId: assetId, quality: quality, uri: fileUri)
         self.resolvePendingCompletions(assetId: assetId, quality: quality, uri: fileUri)
       } catch {
-        print("[JpMediaThumbnails] failed to write thumbnail file: \(error.localizedDescription)")
         self.resolvePendingCompletions(assetId: assetId, quality: quality, uri: nil)
       }
     }
@@ -500,87 +496,7 @@ print("NATIVE [thumb][sendEvent] assetId=\(assetId) quality=\(quality)")
     )
   }
 
-  // MARK: - Preload helpers
-
-private func shouldStop() -> Bool {
-  return stateQueue.sync { shouldStopPreloading }
-}
-
-  // MARK: - Preload engine
-
-private func getPreloadConfigSnapshot() -> (
-  assetIds: [String],
-  width: CGFloat,
-  height: CGFloat,
-  fastBatchSize: Int,
-  highBatchSize: Int,
-  shouldStop: Bool
-) {
-  return stateQueue.sync {
-    return (
-      assetIds: preloadAssetIds,
-      width: preloadWidth,
-      height: preloadHeight,
-      fastBatchSize: preloadFastBatchSize,
-      highBatchSize: preloadHighBatchSize,
-      shouldStop: shouldStopPreloading
-    )
-  }
-}
-
-  private func startPreloading(
-    assetIds: [String],
-    width: CGFloat,
-    height: CGFloat,
-    fastBatchSize: Int,
-    highBatchSize: Int
-  ) {
-    preloadAssetIds = assetIds
-    preloadWidth = width
-    preloadHeight = height
-    preloadFastBatchSize = max(1, fastBatchSize)
-    preloadHighBatchSize = max(1, highBatchSize)
-
-    preloadFastIndex = 0
-    preloadHighIndex = 0
-
-    shouldStopPreloading = false
-
-    scheduleFastPreload()
-    scheduleHighPreload()
-  }
-
-  private func stopPreloading() {
-    shouldStopPreloading = true
-    preloadAssetIds = []
-    preloadFastIndex = 0
-    preloadHighIndex = 0
-    isPreloadingFast = false
-    isPreloadingHigh = false
-
-    if !lastPreheatedFastIds.isEmpty {
-      stopCaching(
-        assetIds: lastPreheatedFastIds,
-        width: preloadWidth,
-        height: preloadHeight,
-        quality: "fast"
-      )
-      lastPreheatedFastIds = []
-    }
-
-    if !lastPreheatedHighIds.isEmpty {
-      stopCaching(
-        assetIds: lastPreheatedHighIds,
-        width: preloadWidth,
-        height: preloadHeight,
-        quality: "high"
-      )
-      lastPreheatedHighIds = []
-    }
-
-    fastPendingCompletions.removeAll()
-    highPendingCompletions.removeAll()
-  }
+  // MARK: - Preload engine helpers
 
   private func hasPendingFastPreload() -> Bool {
     for assetId in preloadAssetIds {
@@ -610,7 +526,6 @@ private func getPreloadConfigSnapshot() -> (
           continue
         }
       } catch {
-        // ignore
       }
 
       if !isLoading(assetId: assetId, quality: "fast") {
@@ -679,7 +594,6 @@ private func getPreloadConfigSnapshot() -> (
           continue
         }
       } catch {
-        // ignore
       }
 
       if !isLoading(assetId: assetId, quality: "high") {
@@ -689,8 +603,6 @@ private func getPreloadConfigSnapshot() -> (
 
     return false
   }
-
-  // MARK: - StateQueue helpers for preload engine
 
   private func getPreloadSnapshot() -> (
     assetIds: [String],
@@ -786,7 +698,61 @@ private func getPreloadConfigSnapshot() -> (
     }
   }
 
-  // MARK: - Replace the two scheduler functions with these
+  // MARK: - Preload engine
+
+  private func startPreloading(
+    assetIds: [String],
+    width: CGFloat,
+    height: CGFloat,
+    fastBatchSize: Int,
+    highBatchSize: Int
+  ) {
+    preloadAssetIds = assetIds
+    preloadWidth = width
+    preloadHeight = height
+    preloadFastBatchSize = max(1, fastBatchSize)
+    preloadHighBatchSize = max(1, highBatchSize)
+
+    preloadFastIndex = 0
+    preloadHighIndex = 0
+
+    shouldStopPreloading = false
+
+    scheduleFastPreload()
+    scheduleHighPreload()
+  }
+
+  private func stopPreloading() {
+    shouldStopPreloading = true
+    preloadAssetIds = []
+    preloadFastIndex = 0
+    preloadHighIndex = 0
+    isPreloadingFast = false
+    isPreloadingHigh = false
+
+    if !lastPreheatedFastIds.isEmpty {
+      stopCaching(
+        assetIds: lastPreheatedFastIds,
+        width: preloadWidth,
+        height: preloadHeight,
+        quality: "fast"
+      )
+      lastPreheatedFastIds = []
+    }
+
+    if !lastPreheatedHighIds.isEmpty {
+      stopCaching(
+        assetIds: lastPreheatedHighIds,
+        width: preloadWidth,
+        height: preloadHeight,
+        quality: "high"
+      )
+      lastPreheatedHighIds = []
+    }
+
+    fastPendingCompletions.removeAll()
+    highPendingCompletions.removeAll()
+  }
 
   private func scheduleFastPreload() {
     guard tryBeginFastPreload() else { return }
@@ -831,10 +797,10 @@ private func getPreloadConfigSnapshot() -> (
           if FileManager.default.fileExists(atPath: fileURL.path) {
             let uri = fileURL.absoluteString
             self.setMemoryCachedUri(uri, for: cacheKey, quality: "fast")
+            self.emitThumbnailReady(assetId: assetId, quality: "fast", uri: uri)
             continue
           }
         } catch {
-          // ignore
         }
 
         if self.isLoading(assetId: assetId, quality: "fast") {
@@ -975,10 +941,10 @@ private func getPreloadConfigSnapshot() -> (
           if FileManager.default.fileExists(atPath: highURL.path) {
             let uri = highURL.absoluteString
             self.setMemoryCachedUri(uri, for: highKey, quality: "high")
+            self.emitThumbnailReady(assetId: assetId, quality: "high", uri: uri)
             continue
           }
         } catch {
-          // ignore
         }
 
         if self.isLoading(assetId: assetId, quality: "high") {
