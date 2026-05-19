@@ -1,5 +1,4 @@
 import * as MediaLibrary from 'expo-media-library';
-import type { EventSubscription } from 'expo-modules-core';
 import JpMediaThumbnails from '@/modules/jp-media-thumbnails';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -15,7 +14,13 @@ import {
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText } from '../Text';
-import { AlbumMenuItem, MediaBucketKey, PickerAlbum, PickerAsset } from './types';
+import {
+  AlbumMenuItem,
+  MediaBucketKey,
+  NativeAlbum,
+  NativeGalleryAsset,
+  PickerAsset,
+} from './types';
 import Animated, {
   useAnimatedScrollHandler,
   useAnimatedStyle,
@@ -43,16 +48,20 @@ const ALBUM_MENU: AlbumMenuItem[] = [
 
 const AnimatedFlatList = Animated.createAnimatedComponent(FlatList<PickerAsset>);
 
-function toPickerAsset(asset: MediaLibrary.Asset): PickerAsset {
+function toPickerAssetFromNative(asset: NativeGalleryAsset): PickerAsset {
   return {
     id: asset.id,
-    uri: asset.uri,
+    uri: `ph://${asset.id}`,
     thumbnailUri: null,
-    mediaType: asset.mediaType === 'video' ? 'video' : 'photo',
+    mediaType: asset.mediaType,
     width: asset.width,
     height: asset.height,
     duration: asset.duration ?? undefined,
   };
+}
+
+function makeSourceKey(bucket: MediaBucketKey, albumId: string) {
+  return `${bucket}:${albumId}`;
 }
 
 const AssetCell = React.memo(function AssetCell({
@@ -105,7 +114,7 @@ const AssetCell = React.memo(function AssetCell({
 
 export default function PostMediaPickerScreen() {
   const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
-  const [albums, setAlbums] = useState<PickerAlbum[]>([]);
+  const [albums, setAlbums] = useState<NativeAlbum[]>([]);
   const [assets, setAssets] = useState<PickerAsset[]>([]);
   const [activeBucket, setActiveBucket] = useState<MediaBucketKey>('recent');
   const [activeAlbumId, setActiveAlbumId] = useState<string | null>(null);
@@ -118,6 +127,16 @@ export default function PostMediaPickerScreen() {
   const [loading, setLoading] = useState(false);
   const [hasNextPage, setHasNextPage] = useState(true);
   const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
+
+  const [systemAlbumIds, setSystemAlbumIds] = useState<{
+    recent: string | null;
+    favorites: string | null;
+    videos: string | null;
+  }>({
+    recent: null,
+    favorites: null,
+    videos: null,
+  });
 
   const fastThumbnailMapRef = useRef<Map<string, string>>(new Map());
   const highThumbnailMapRef = useRef<Map<string, string>>(new Map());
@@ -135,6 +154,9 @@ export default function PostMediaPickerScreen() {
   const autoPagingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const lastPreloadSignatureRef = useRef('');
+  const currentAssetIdSetRef = useRef<Set<string>>(new Set());
+
+  const currentSourceGenerationRef = useRef<number>(0);
 
   const previewHeight = useSharedValue(0);
   const dragStartHeight = useSharedValue(0);
@@ -163,23 +185,22 @@ export default function PostMediaPickerScreen() {
 
   const loadAlbums = useCallback(async () => {
     try {
-      const permission = await MediaLibrary.getPermissionsAsync();
+      const result = await JpMediaThumbnails.getAlbums();
 
-      if (!permission.granted && permission.accessPrivileges !== 'limited') {
-        return;
-      }
-
-      const result = await MediaLibrary.getAlbumsAsync({
-        includeSmartAlbums: true,
-      });
-
-      const mapped: PickerAlbum[] = result.map((album) => ({
+      const mapped: NativeAlbum[] = result.map((album) => ({
         id: album.id,
         title: album.title,
-        count: album.assetCount ?? 0,
+        count: album.count,
+        type: album.type,
       }));
 
       setAlbums(mapped);
+
+      setSystemAlbumIds({
+        recent: result.find((item) => item.title === 'Recents')?.id ?? null,
+        favorites: result.find((item) => item.title === 'Favorites')?.id ?? null,
+        videos: result.find((item) => item.title === 'Videos')?.id ?? null,
+      });
     } catch {
       // noop
     }
@@ -228,6 +249,9 @@ export default function PostMediaPickerScreen() {
 
   const enqueueThumbnailPatch = useCallback(
     (assetId: string, uri: string) => {
+      const prev = pendingThumbnailPatchMapRef.current.get(assetId);
+      if (prev === uri) return;
+
       pendingThumbnailPatchMapRef.current.set(assetId, uri);
 
       if (patchFlushScheduledRef.current) return;
@@ -245,36 +269,31 @@ export default function PostMediaPickerScreen() {
     async ({
       reset,
       albumId,
-      bucket,
       first,
     }: {
       reset: boolean;
       albumId: string | null;
-      bucket: MediaBucketKey;
       first: number;
     }) => {
-      const permission = await MediaLibrary.getPermissionsAsync();
-      const granted = permission.granted || permission.accessPrivileges === 'limited';
-
-      if (!granted) return null;
+      if (!albumId) return null;
       if (loadingRef.current) return null;
 
       loadingRef.current = true;
       setLoading(true);
 
       try {
-        const result = await MediaLibrary.getAssetsAsync({
+        const result = await JpMediaThumbnails.getAssetsInAlbum(
+          albumId,
           first,
-          after: reset ? undefined : (endCursorRef.current ?? undefined),
-          album: bucket === 'albums' ? (albumId ?? undefined) : undefined,
-          mediaType: bucket === 'videos' ? ['video'] : ['photo', 'video'],
-          sortBy: [[MediaLibrary.SortBy.creationTime, false]],
-        });
+          reset ? null : endCursorRef.current,
+        );
 
-        const mapped = result.assets.map(toPickerAsset);
+        const mapped = result.assets.map(toPickerAssetFromNative);
 
         setAssets((prev) => {
-          if (reset) return mapped;
+          if (reset) {
+            return mapped;
+          }
 
           const existingIds = new Set(prev.map((item) => item.id));
           const deduped = mapped.filter((item) => !existingIds.has(item.id));
@@ -295,44 +314,111 @@ export default function PostMediaPickerScreen() {
     [],
   );
 
-  const scheduleAutoPagination = useCallback(() => {
-    if (autoPagingTimerRef.current) {
-      clearTimeout(autoPagingTimerRef.current);
+  useEffect(() => {
+    currentAssetIdSetRef.current = new Set(assets.map((item) => item.id));
+  }, [assets]);
+
+  useEffect(() => {
+    JpMediaThumbnails.debugGetPreloadGeneration()
+      .then((generation) => {
+        console.log('[debugGetPreloadGeneration]', {
+          activeBucket,
+          activeAlbumId,
+          generation,
+          sourceGeneration: currentSourceGenerationRef.current,
+        });
+      })
+      .catch((error) => {
+        console.log('[debugGetPreloadGeneration][failed]', error);
+      });
+  }, [activeBucket, activeAlbumId]);
+
+  useEffect(() => {
+    if (assets.length === 0) return;
+
+    const assetIds = assets.map((item) => item.id);
+    const signature = assetIds.join(',');
+
+    if (signature === lastPreloadSignatureRef.current) {
+      return;
     }
 
-    autoPagingTimerRef.current = setTimeout(async () => {
-      if (autoPagingRunningRef.current) return;
-      if (!hasNextPage) return;
-      if (loadingRef.current || loadingMoreRef.current) return;
+    lastPreloadSignatureRef.current = signature;
 
-      autoPagingRunningRef.current = true;
-      loadingMoreRef.current = true;
-
-      try {
-        const result = await loadAssets({
-          reset: false,
-          albumId: activeAlbumId,
-          bucket: activeBucket,
-          first: PAGINATION_LOAD_COUNT,
+    JpMediaThumbnails.debugGetPreloadGeneration()
+      .then((generation) => {
+        console.log('[startPreloading target]', {
+          activeBucket,
+          activeAlbumId,
+          assetsLength: assets.length,
+          firstId: assetIds[0],
+          generation,
+          sourceGeneration: currentSourceGenerationRef.current,
         });
+      })
+      .catch(() => {});
 
-        if (result?.hasNextPage) {
-          scheduleAutoPagination();
+    JpMediaThumbnails.startPreloading(assetIds, {
+      width: CELL_SIZE,
+      height: CELL_SIZE,
+      fastBatchSize: 48,
+      highBatchSize: 12,
+    }).catch(() => {});
+  }, [activeAlbumId, activeBucket, assets]);
+
+  useEffect(() => {
+    const subscription = JpMediaThumbnails.addListener(
+      'onThumbnailReady',
+      ({ assetId, quality, uri, sourceGeneration }) => {
+        if (!uri) return;
+
+        if (sourceGeneration < currentSourceGenerationRef.current) {
+          return;
         }
-      } finally {
-        autoPagingRunningRef.current = false;
-        loadingMoreRef.current = false;
-      }
-    }, 120);
-  }, [activeAlbumId, activeBucket, hasNextPage, loadAssets]);
+
+        if (!currentAssetIdSetRef.current.has(assetId)) {
+          return;
+        }
+
+        if (quality === 'high') {
+          const prevHigh = highThumbnailMapRef.current.get(assetId);
+          if (prevHigh === uri) return;
+
+          highThumbnailMapRef.current.set(assetId, uri);
+          fastThumbnailMapRef.current.set(assetId, uri);
+          enqueueThumbnailPatch(assetId, uri);
+          return;
+        }
+
+        if (highThumbnailMapRef.current.has(assetId)) {
+          return;
+        }
+
+        const prevFast = fastThumbnailMapRef.current.get(assetId);
+        if (prevFast === uri) return;
+
+        fastThumbnailMapRef.current.set(assetId, uri);
+        enqueueThumbnailPatch(assetId, uri);
+      },
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [enqueueThumbnailPatch]);
+
+  const getAlbumIdForBucket = useCallback(
+    (bucket: MediaBucketKey, explicitAlbumId: string | null) => {
+      if (bucket === 'recent') return systemAlbumIds.recent;
+      if (bucket === 'favorites') return systemAlbumIds.favorites;
+      if (bucket === 'videos') return systemAlbumIds.videos;
+      if (bucket === 'albums') return explicitAlbumId;
+      return null;
+    },
+    [systemAlbumIds],
+  );
 
   const resetPickerSession = useCallback(() => {
-    try {
-      JpMediaThumbnails.stopPreloading();
-    } catch {
-      // noop
-    }
-
     endCursorRef.current = null;
 
     fastThumbnailMapRef.current.clear();
@@ -341,6 +427,7 @@ export default function PostMediaPickerScreen() {
 
     pendingThumbnailPatchMapRef.current.clear();
     patchFlushScheduledRef.current = false;
+    currentAssetIdSetRef.current.clear();
 
     if (patchFlushAnimationFrameRef.current != null) {
       cancelAnimationFrame(patchFlushAnimationFrameRef.current);
@@ -361,6 +448,54 @@ export default function PostMediaPickerScreen() {
     setActivePreviewId(null);
   }, []);
 
+  const beginNewSource = useCallback(async (bucket: MediaBucketKey, albumId: string | null) => {
+    if (!albumId) {
+      throw new Error(`beginNewSource called without albumId for bucket: ${bucket}`);
+    }
+
+    const nextSourceKey = makeSourceKey(bucket, albumId);
+    const nextGeneration = await JpMediaThumbnails.setActiveSource(nextSourceKey);
+    currentSourceGenerationRef.current = nextGeneration;
+
+    console.log('[setActiveSource]', {
+      sourceKey: nextSourceKey,
+      sourceGeneration: nextGeneration,
+    });
+
+    return nextGeneration;
+  }, []);
+
+  const scheduleAutoPagination = useCallback(() => {
+    if (autoPagingTimerRef.current) {
+      clearTimeout(autoPagingTimerRef.current);
+    }
+
+    autoPagingTimerRef.current = setTimeout(async () => {
+      if (autoPagingRunningRef.current) return;
+      if (!hasNextPage) return;
+      if (loadingRef.current || loadingMoreRef.current) return;
+      if (!activeAlbumId) return;
+
+      autoPagingRunningRef.current = true;
+      loadingMoreRef.current = true;
+
+      try {
+        const result = await loadAssets({
+          reset: false,
+          albumId: activeAlbumId,
+          first: PAGINATION_LOAD_COUNT,
+        });
+
+        if (result?.hasNextPage) {
+          scheduleAutoPagination();
+        }
+      } finally {
+        autoPagingRunningRef.current = false;
+        loadingMoreRef.current = false;
+      }
+    }, 120);
+  }, [activeAlbumId, hasNextPage, loadAssets]);
+
   const ensureSelectedThumbnailHighQuality = useCallback(
     async (assetId: string) => {
       if (highThumbnailMapRef.current.has(assetId)) return;
@@ -377,6 +512,7 @@ export default function PostMediaPickerScreen() {
 
         if (uri) {
           highThumbnailMapRef.current.set(assetId, uri);
+          fastThumbnailMapRef.current.set(assetId, uri);
           enqueueThumbnailPatch(assetId, uri);
         }
       } finally {
@@ -403,64 +539,10 @@ export default function PostMediaPickerScreen() {
       setActiveAlbumId(null);
       setActiveAlbumTitle('최근 항목');
       resetAssetState();
-
-      await loadAssets({
-        reset: true,
-        albumId: null,
-        bucket: 'recent',
-        first: INITIAL_LOAD_COUNT,
-      });
     } finally {
       setBootstrapping(false);
     }
-  }, [loadAlbums, loadAssets, requestPermission, resetAssetState]);
-
-  useEffect(() => {
-    const subscription: EventSubscription = JpMediaThumbnails.addListener(
-      'onThumbnailReady',
-      ({ assetId, quality, uri }) => {
-        if (!uri) return;
-
-        if (quality === 'high') {
-          highThumbnailMapRef.current.set(assetId, uri);
-        } else if (!highThumbnailMapRef.current.has(assetId)) {
-          fastThumbnailMapRef.current.set(assetId, uri);
-        }
-
-        if (quality === 'fast' && highThumbnailMapRef.current.has(assetId)) {
-          return;
-        }
-
-        enqueueThumbnailPatch(assetId, uri);
-      },
-    );
-
-    return () => {
-      subscription.remove();
-    };
-  }, [enqueueThumbnailPatch]);
-
-  useEffect(() => {
-    if (assets.length === 0) return;
-
-    const assetIds = assets.map((item) => item.id);
-    const signature = assetIds.join(',');
-
-    if (signature === lastPreloadSignatureRef.current) {
-      return;
-    }
-
-    lastPreloadSignatureRef.current = signature;
-
-    JpMediaThumbnails.startPreloading(assetIds, {
-      width: CELL_SIZE,
-      height: CELL_SIZE,
-      fastBatchSize: 48,
-      highBatchSize: 12,
-    }).catch(() => {
-      // noop
-    });
-  }, [assets]);
+  }, [loadAlbums, requestPermission, resetAssetState]);
 
   useEffect(() => {
     return () => {
@@ -496,6 +578,33 @@ export default function PostMediaPickerScreen() {
   useEffect(() => {
     bootstrap().then();
   }, [bootstrap]);
+
+  useEffect(() => {
+    if (!systemAlbumIds.recent) return;
+
+    const initializeRecent = async () => {
+      const nextAlbumId = systemAlbumIds.recent;
+      if (!nextAlbumId) return;
+
+      resetAssetState();
+
+      setActiveBucket('recent');
+      setActiveAlbumId(nextAlbumId);
+      setActiveAlbumTitle('최근 항목');
+
+      await beginNewSource('recent', nextAlbumId);
+
+      await loadAssets({
+        reset: true,
+        albumId: nextAlbumId,
+        first: INITIAL_LOAD_COUNT,
+      });
+    };
+
+    initializeRecent().catch((error) => {
+      console.log('[initializeRecent][failed]', error);
+    });
+  }, [beginNewSource, loadAssets, resetAssetState, systemAlbumIds.recent]);
 
   useEffect(() => {
     if (selectedIds.length === 0) {
@@ -538,22 +647,6 @@ export default function PostMediaPickerScreen() {
     previewHeight.value = withTiming(PREVIEW_MAX_HEIGHT, { duration: 220 });
   }, [previewHeight, selectedIds.length]);
 
-  const snapToNearestPreviewState = useCallback(() => {
-    'worklet';
-
-    if (selectedCount.value <= 0) {
-      previewHeight.value = withTiming(PREVIEW_MIN_HEIGHT, { duration: 220 });
-      return;
-    }
-
-    const midpoint = (PREVIEW_MAX_HEIGHT - PREVIEW_MIN_HEIGHT) * 0.5;
-    const shouldCollapse = previewHeight.value < midpoint;
-
-    previewHeight.value = withTiming(shouldCollapse ? PREVIEW_MIN_HEIGHT : PREVIEW_MAX_HEIGHT, {
-      duration: 220,
-    });
-  }, [previewHeight, selectedCount]);
-
   const onListScroll = useAnimatedScrollHandler({
     onScroll: (event) => {
       const nextY = event.contentOffset.y;
@@ -565,13 +658,11 @@ export default function PostMediaPickerScreen() {
         return;
       }
 
-      // 위로 스크롤하면 접힘
       if (deltaY > 0 && previewHeight.value > PREVIEW_MIN_HEIGHT) {
         previewHeight.value = Math.max(PREVIEW_MIN_HEIGHT, previewHeight.value - deltaY);
         return;
       }
 
-      // 아래로 스크롤하면 갤러리 내부에서도 다시 열림
       if (deltaY < 0 && previewHeight.value < PREVIEW_MAX_HEIGHT) {
         previewHeight.value = Math.min(PREVIEW_MAX_HEIGHT, previewHeight.value + Math.abs(deltaY));
       }
@@ -655,15 +746,22 @@ export default function PostMediaPickerScreen() {
   const applyBucket = useCallback(
     async (bucket: MediaBucketKey) => {
       setMenuOpen(false);
-      resetAssetState();
 
       if (bucket === 'albums') {
         setAlbumsSheetOpen(true);
         return;
       }
 
+      const nextAlbumId = getAlbumIdForBucket(bucket, null);
+      if (!nextAlbumId) {
+        console.log('[applyBucket] missing album id for bucket', { bucket });
+        return;
+      }
+
+      resetAssetState();
+
       setActiveBucket(bucket);
-      setActiveAlbumId(null);
+      setActiveAlbumId(nextAlbumId);
 
       if (bucket === 'recent') {
         setActiveAlbumTitle('최근 항목');
@@ -673,18 +771,19 @@ export default function PostMediaPickerScreen() {
         setActiveAlbumTitle('즐겨찾기');
       }
 
+      await beginNewSource(bucket, nextAlbumId);
+
       await loadAssets({
         reset: true,
-        albumId: null,
-        bucket,
+        albumId: nextAlbumId,
         first: INITIAL_LOAD_COUNT,
       });
     },
-    [loadAssets, resetAssetState],
+    [beginNewSource, getAlbumIdForBucket, loadAssets, resetAssetState],
   );
 
   const applyAlbum = useCallback(
-    async (album: PickerAlbum) => {
+    async (album: NativeAlbum) => {
       setAlbumsSheetOpen(false);
       setMenuOpen(false);
       resetAssetState();
@@ -693,14 +792,15 @@ export default function PostMediaPickerScreen() {
       setActiveAlbumId(album.id);
       setActiveAlbumTitle(album.title);
 
+      await beginNewSource('albums', album.id);
+
       await loadAssets({
         reset: true,
         albumId: album.id,
-        bucket: 'albums',
         first: INITIAL_LOAD_COUNT,
       });
     },
-    [loadAssets, resetAssetState],
+    [beginNewSource, loadAssets, resetAssetState],
   );
 
   const toggleAsset = useCallback(
@@ -766,18 +866,18 @@ export default function PostMediaPickerScreen() {
 
   const onEndReached = useCallback(() => {
     if (!hasNextPage || loading || loadingMoreRef.current) return;
+    if (!activeAlbumId) return;
 
     loadingMoreRef.current = true;
 
     loadAssets({
       reset: false,
       albumId: activeAlbumId,
-      bucket: activeBucket,
       first: PAGINATION_LOAD_COUNT,
     }).finally(() => {
       loadingMoreRef.current = false;
     });
-  }, [activeAlbumId, activeBucket, hasNextPage, loadAssets, loading]);
+  }, [activeAlbumId, hasNextPage, loadAssets, loading]);
 
   if (bootstrapping || permissionGranted === null) {
     return (

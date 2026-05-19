@@ -6,9 +6,6 @@ public class JpMediaThumbnailsModule: Module {
   private let imageManager = PHCachingImageManager()
   private let stateQueue = DispatchQueue(label: "jp.media.thumbnails.state")
 
-  // MARK: - Event observing state
-  private var isObservingThumbnailReady = false
-
   // MARK: - In-memory caches
   private var fastMemoryCache: [String: String] = [:]
   private var highMemoryCache: [String: String] = [:]
@@ -21,6 +18,20 @@ public class JpMediaThumbnailsModule: Module {
   private var fastPendingCompletions: [String: [(String?) -> Void]] = [:]
   private var highPendingCompletions: [String: [(String?) -> Void]] = [:]
 
+  // MARK: - Source state
+  // JS calls setActiveSource(...) whenever the visible gallery source changes.
+  // We stamp each request/preload task with the source generation that was active
+  // when the work started, so late events from an older album can be ignored.
+  private var activeSourceId: String = "initial"
+  private var activeSourceGeneration: Int = 0
+
+  // We keep track of which thumbnail event has already been emitted for the
+  // *current* source generation. This prevents repeated cache-hit replay from
+  // causing heavy JS re-rendering during pagination/append, while still allowing
+  // a fresh replay after the user switches to a new source.
+  private var emittedFastThumbnailUris: [String: String] = [:]
+  private var emittedHighThumbnailUris: [String: String] = [:]
+
   // MARK: - Preload engine state
   private var preloadAssetIds: [String] = []
   private var preloadWidth: CGFloat = 200
@@ -32,6 +43,7 @@ public class JpMediaThumbnailsModule: Module {
   private var isPreloadingFast = false
   private var isPreloadingHigh = false
   private var shouldStopPreloading = false
+  private var preloadGeneration: Int = 0
 
   // MARK: - Preheat tracking
   private var lastPreheatedFastIds: [String] = []
@@ -41,16 +53,156 @@ public class JpMediaThumbnailsModule: Module {
     Name("JpMediaThumbnails")
     Events("onThumbnailReady")
 
-    OnStartObserving("onThumbnailReady") {
-      self.stateQueue.async {
-        self.isObservingThumbnailReady = true
+    AsyncFunction("getAlbums") { (promise: Promise) in
+      var items: [[String: Any]] = []
+
+      let smartAlbums = PHAssetCollection.fetchAssetCollections(
+        with: .smartAlbum,
+        subtype: .any,
+        options: nil
+      )
+
+      smartAlbums.enumerateObjects { collection, _, _ in
+        let assets = PHAsset.fetchAssets(in: collection, options: nil)
+        let count = assets.count
+        guard count > 0 else { return }
+
+        items.append([
+          "id": collection.localIdentifier,
+          "title": collection.localizedTitle ?? "Untitled",
+          "count": count,
+          "type": "smart"
+        ])
       }
+
+      let userAlbums = PHCollectionList.fetchTopLevelUserCollections(with: nil)
+      userAlbums.enumerateObjects { collection, _, _ in
+        guard let assetCollection = collection as? PHAssetCollection else { return }
+
+        let assets = PHAsset.fetchAssets(in: assetCollection, options: nil)
+        let count = assets.count
+        guard count > 0 else { return }
+
+        items.append([
+          "id": assetCollection.localIdentifier,
+          "title": assetCollection.localizedTitle ?? "Untitled",
+          "count": count,
+          "type": "user"
+        ])
+      }
+
+      promise.resolve(items)
     }
 
-    OnStopObserving("onThumbnailReady") {
-      self.stateQueue.async {
-        self.isObservingThumbnailReady = false
+    AsyncFunction("setActiveSource") { (sourceId: String, promise: Promise) in
+      // Tear down any preload/caching work from the previous source first so
+      // the next source starts from a clean native state.
+      self.stopPreloading()
+
+      let nextGeneration = self.stateQueue.sync { () -> Int in
+        self.activeSourceId = sourceId
+        self.activeSourceGeneration += 1
+
+        // New source = new replay window. Clear emitted-event tracking so cached
+        // thumbnails can be emitted once again for the new album if needed.
+        self.emittedFastThumbnailUris.removeAll()
+        self.emittedHighThumbnailUris.removeAll()
+
+        return self.activeSourceGeneration
       }
+
+      promise.resolve(nextGeneration)
+    }
+
+    AsyncFunction("getAssetsInAlbum") { (albumId: String, first: Int, after: String?, promise: Promise) in
+      let collections = PHAssetCollection.fetchAssetCollections(
+        withLocalIdentifiers: [albumId],
+        options: nil
+      )
+
+      guard let collection = collections.firstObject else {
+        promise.resolve([
+          "assets": [],
+          "hasNextPage": false,
+          "endCursor": NSNull()
+        ])
+        return
+      }
+
+      let options = PHFetchOptions()
+      options.sortDescriptors = [
+        NSSortDescriptor(key: "creationDate", ascending: false)
+      ]
+
+      let fetchResult = PHAsset.fetchAssets(in: collection, options: options)
+      let totalCount = fetchResult.count
+
+      if totalCount == 0 {
+        promise.resolve([
+          "assets": [],
+          "hasNextPage": false,
+          "endCursor": NSNull()
+        ])
+        return
+      }
+
+      var startIndex = 0
+
+      if let after, !after.isEmpty {
+        let afterResult = PHAsset.fetchAssets(withLocalIdentifiers: [after], options: nil)
+        if let afterAsset = afterResult.firstObject {
+          let index = fetchResult.index(of: afterAsset)
+          if index != NSNotFound {
+            startIndex = index + 1
+          }
+        }
+      }
+
+      if startIndex >= totalCount {
+        promise.resolve([
+          "assets": [],
+          "hasNextPage": false,
+          "endCursor": NSNull()
+        ])
+        return
+      }
+
+      let pageSize = max(1, first)
+      let endExclusive = min(startIndex + pageSize, totalCount)
+
+      var items: [[String: Any]] = []
+      items.reserveCapacity(endExclusive - startIndex)
+
+      if startIndex < endExclusive {
+        for index in startIndex..<endExclusive {
+          let asset = fetchResult.object(at: index)
+
+          var payload: [String: Any] = [
+            "id": asset.localIdentifier,
+            "mediaType": asset.mediaType == .video ? "video" : "photo",
+            "width": asset.pixelWidth,
+            "height": asset.pixelHeight
+          ]
+
+          if asset.mediaType == .video {
+            payload["duration"] = asset.duration
+          }
+
+          items.append(payload)
+        }
+      }
+
+      let endCursor: String? = items.isEmpty
+        ? nil
+        : fetchResult.object(at: endExclusive - 1).localIdentifier
+
+      let hasNextPage = endExclusive < totalCount
+
+      promise.resolve([
+        "assets": items,
+        "hasNextPage": hasNextPage,
+        "endCursor": endCursor ?? NSNull()
+      ])
     }
 
     AsyncFunction("getThumbnail") { (assetId: String, options: [String: Any], promise: Promise) in
@@ -161,21 +313,83 @@ public class JpMediaThumbnailsModule: Module {
     Function("stopPreloading") {
       self.stopPreloading()
     }
+
+    AsyncFunction("debugGetPreloadGeneration") { (promise: Promise) in
+      promise.resolve(self.preloadGeneration)
+    }
   }
 
   // MARK: - Event helpers
 
-  private func emitThumbnailReady(assetId: String, quality: String, uri: String) {
-    DispatchQueue.main.async {
-      let observing = self.stateQueue.sync { self.isObservingThumbnailReady }
-      guard observing else { return }
+  private func getActiveSourceGeneration() -> Int {
+    return stateQueue.sync { activeSourceGeneration }
+  }
 
-      self.sendEvent("onThumbnailReady", [
-        "assetId": assetId,
-        "quality": quality,
-        "uri": uri
-      ])
+  private func clearEmittedThumbnailEvents() {
+    stateQueue.sync {
+      emittedFastThumbnailUris.removeAll()
+      emittedHighThumbnailUris.removeAll()
     }
+  }
+
+  private func shouldEmitThumbnailReady(
+    assetId: String,
+    quality: String,
+    uri: String,
+    sourceGeneration: Int
+  ) -> Bool {
+    return stateQueue.sync {
+      // Never emit an event for stale work after JS has already switched to a
+      // newer source generation.
+      if sourceGeneration != activeSourceGeneration {
+        return false
+      }
+
+      if quality == "high" {
+        if emittedHighThumbnailUris[assetId] == uri {
+          return false
+        }
+
+        emittedHighThumbnailUris[assetId] = uri
+        return true
+      }
+
+      // Once high has been emitted for the current source, do not let a later
+      // fast event downgrade the visible thumbnail in JS.
+      if emittedHighThumbnailUris[assetId] != nil {
+        return false
+      }
+
+      if emittedFastThumbnailUris[assetId] == uri {
+        return false
+      }
+
+      emittedFastThumbnailUris[assetId] = uri
+      return true
+    }
+  }
+
+  private func emitThumbnailReady(
+    assetId: String,
+    quality: String,
+    uri: String,
+    sourceGeneration: Int
+  ) {
+    guard shouldEmitThumbnailReady(
+      assetId: assetId,
+      quality: quality,
+      uri: uri,
+      sourceGeneration: sourceGeneration
+    ) else {
+      return
+    }
+
+    sendEvent("onThumbnailReady", [
+      "assetId": assetId,
+      "quality": quality,
+      "uri": uri,
+      "sourceGeneration": sourceGeneration
+    ])
   }
 
   // MARK: - Cache helpers
@@ -314,6 +528,7 @@ public class JpMediaThumbnailsModule: Module {
     quality: String,
     completion: @escaping (String?) -> Void
   ) {
+    let sourceGeneration = getActiveSourceGeneration()
     let scale = UIScreen.main.scale
     let cacheKey = makeMemoryCacheKey(
       assetId: assetId,
@@ -324,7 +539,12 @@ public class JpMediaThumbnailsModule: Module {
     )
 
     if let memoryUri = getMemoryCachedUri(for: cacheKey, quality: quality) {
-      emitThumbnailReady(assetId: assetId, quality: quality, uri: memoryUri)
+      emitThumbnailReady(
+        assetId: assetId,
+        quality: quality,
+        uri: memoryUri,
+        sourceGeneration: sourceGeneration
+      )
       completion(memoryUri)
       return
     }
@@ -347,7 +567,12 @@ public class JpMediaThumbnailsModule: Module {
 
     if FileManager.default.fileExists(atPath: fileURL.path) {
       setMemoryCachedUri(fileUri, for: cacheKey, quality: quality)
-      emitThumbnailReady(assetId: assetId, quality: quality, uri: fileUri)
+      emitThumbnailReady(
+        assetId: assetId,
+        quality: quality,
+        uri: fileUri,
+        sourceGeneration: sourceGeneration
+      )
       completion(fileUri)
       return
     }
@@ -381,41 +606,56 @@ public class JpMediaThumbnailsModule: Module {
 
     let targetSize = CGSize(width: width * scale, height: height * scale)
 
+    func finish(_ uri: String?) {
+      self.unmarkLoading(assetId: assetId, quality: quality)
+      self.resolvePendingCompletions(assetId: assetId, quality: quality, uri: uri)
+    }
+
     imageManager.requestImage(
       for: asset,
       targetSize: targetSize,
       contentMode: .aspectFill,
       options: requestOptions
     ) { image, info in
-      defer {
-        self.unmarkLoading(assetId: assetId, quality: quality)
+      let isCancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
+      let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+      let hasError = info?[PHImageErrorKey] != nil
+
+      if isCancelled || hasError {
+        finish(nil)
+        return
       }
 
-      let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-
+      // High-quality requests frequently receive a degraded callback first.
+      // We must keep the request alive until the final full-quality image arrives.
       if quality == "high" && isDegraded {
         return
       }
 
       guard let image else {
-        self.resolvePendingCompletions(assetId: assetId, quality: quality, uri: nil)
+        finish(nil)
         return
       }
 
       let compressionQuality: CGFloat = quality == "high" ? 0.9 : 0.72
 
       guard let data = image.jpegData(compressionQuality: compressionQuality) else {
-        self.resolvePendingCompletions(assetId: assetId, quality: quality, uri: nil)
+        finish(nil)
         return
       }
 
       do {
         try data.write(to: fileURL, options: .atomic)
         self.setMemoryCachedUri(fileUri, for: cacheKey, quality: quality)
-        self.emitThumbnailReady(assetId: assetId, quality: quality, uri: fileUri)
-        self.resolvePendingCompletions(assetId: assetId, quality: quality, uri: fileUri)
+        self.emitThumbnailReady(
+          assetId: assetId,
+          quality: quality,
+          uri: fileUri,
+          sourceGeneration: sourceGeneration
+        )
+        finish(fileUri)
       } catch {
-        self.resolvePendingCompletions(assetId: assetId, quality: quality, uri: nil)
+        finish(nil)
       }
     }
   }
@@ -496,7 +736,7 @@ public class JpMediaThumbnailsModule: Module {
     )
   }
 
-  // MARK: - Preload engine helpers
+  // MARK: - Preload helpers
 
   private func hasPendingFastPreload() -> Bool {
     for assetId in preloadAssetIds {
@@ -610,7 +850,8 @@ public class JpMediaThumbnailsModule: Module {
     height: CGFloat,
     fastBatchSize: Int,
     highBatchSize: Int,
-    shouldStop: Bool
+    shouldStop: Bool,
+    sourceGeneration: Int
   ) {
     return stateQueue.sync {
       (
@@ -619,7 +860,8 @@ public class JpMediaThumbnailsModule: Module {
         height: preloadHeight,
         fastBatchSize: preloadFastBatchSize,
         highBatchSize: preloadHighBatchSize,
-        shouldStop: shouldStopPreloading
+        shouldStop: shouldStopPreloading,
+        sourceGeneration: activeSourceGeneration
       )
     }
   }
@@ -707,22 +949,33 @@ public class JpMediaThumbnailsModule: Module {
     fastBatchSize: Int,
     highBatchSize: Int
   ) {
+    let isFreshStart = preloadAssetIds.isEmpty || shouldStopPreloading
+
     preloadAssetIds = assetIds
     preloadWidth = width
     preloadHeight = height
     preloadFastBatchSize = max(1, fastBatchSize)
     preloadHighBatchSize = max(1, highBatchSize)
 
-    preloadFastIndex = 0
-    preloadHighIndex = 0
-
     shouldStopPreloading = false
+
+    // Important: keep the current indexes for append/pagination in the same
+    // source so high-quality progression continues from the tail instead of
+    // repeatedly restarting near the front.
+    if isFreshStart {
+      preloadFastIndex = 0
+      preloadHighIndex = 0
+    } else {
+      preloadFastIndex = min(preloadFastIndex, preloadAssetIds.count)
+      preloadHighIndex = min(preloadHighIndex, preloadAssetIds.count)
+    }
 
     scheduleFastPreload()
     scheduleHighPreload()
   }
 
   private func stopPreloading() {
+    preloadGeneration += 1
     shouldStopPreloading = true
     preloadAssetIds = []
     preloadFastIndex = 0
@@ -752,15 +1005,29 @@ public class JpMediaThumbnailsModule: Module {
 
     fastPendingCompletions.removeAll()
     highPendingCompletions.removeAll()
+    fastLoadingIds.removeAll()
+    highLoadingIds.removeAll()
+
+    // Clear per-source emitted-event tracking so the next source can replay
+    // cached results once from a clean state.
+    clearEmittedThumbnailEvents()
+
+    imageManager.stopCachingImagesForAllAssets()
   }
 
   private func scheduleFastPreload() {
     guard tryBeginFastPreload() else { return }
+    let generation = preloadGeneration
 
     DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.05) {
+      if generation != self.preloadGeneration {
+        self.endFastPreload()
+        return
+      }
+
       let snapshot = self.getPreloadSnapshot()
 
-      if snapshot.shouldStop {
+      if snapshot.shouldStop || generation != self.preloadGeneration {
         self.endFastPreload()
         return
       }
@@ -770,6 +1037,11 @@ public class JpMediaThumbnailsModule: Module {
       var index = self.getFastPreloadIndex()
 
       while index < snapshot.assetIds.count && batchIds.count < snapshot.fastBatchSize {
+        if generation != self.preloadGeneration {
+          self.endFastPreload()
+          return
+        }
+
         let assetId = snapshot.assetIds[index]
         index += 1
 
@@ -781,7 +1053,13 @@ public class JpMediaThumbnailsModule: Module {
           quality: "fast"
         )
 
-        if self.getMemoryCachedUri(for: cacheKey, quality: "fast") != nil {
+        if let uri = self.getMemoryCachedUri(for: cacheKey, quality: "fast") {
+          self.emitThumbnailReady(
+            assetId: assetId,
+            quality: "fast",
+            uri: uri,
+            sourceGeneration: snapshot.sourceGeneration
+          )
           continue
         }
 
@@ -797,7 +1075,12 @@ public class JpMediaThumbnailsModule: Module {
           if FileManager.default.fileExists(atPath: fileURL.path) {
             let uri = fileURL.absoluteString
             self.setMemoryCachedUri(uri, for: cacheKey, quality: "fast")
-            self.emitThumbnailReady(assetId: assetId, quality: "fast", uri: uri)
+            self.emitThumbnailReady(
+              assetId: assetId,
+              quality: "fast",
+              uri: uri,
+              sourceGeneration: snapshot.sourceGeneration
+            )
             continue
           }
         } catch {
@@ -810,12 +1093,19 @@ public class JpMediaThumbnailsModule: Module {
         batchIds.append(assetId)
       }
 
-      self.setFastPreloadIndex(index >= snapshot.assetIds.count ? 0 : index)
+      if generation != self.preloadGeneration {
+        self.endFastPreload()
+        return
+      }
+
+      // Do not wrap back to 0 here. Keeping the tail index prevents large
+      // albums from repeatedly re-scanning the front and starving later assets.
+      self.setFastPreloadIndex(min(index, snapshot.assetIds.count))
 
       guard !batchIds.isEmpty else {
         self.endFastPreload()
 
-        if self.hasPendingFastPreload() {
+        if self.hasPendingFastPreload() && generation == self.preloadGeneration {
           self.scheduleFastPreload()
         }
 
@@ -859,10 +1149,15 @@ public class JpMediaThumbnailsModule: Module {
       }
 
       dispatchGroup.notify(queue: .main) {
+        if generation != self.preloadGeneration {
+          self.endFastPreload()
+          return
+        }
+
         self.endFastPreload()
 
         let current = self.getPreloadSnapshot()
-        if self.hasPendingFastPreload() && !current.shouldStop {
+        if self.hasPendingFastPreload() && !current.shouldStop && generation == self.preloadGeneration {
           self.scheduleFastPreload()
         }
       }
@@ -871,11 +1166,17 @@ public class JpMediaThumbnailsModule: Module {
 
   private func scheduleHighPreload() {
     guard tryBeginHighPreload() else { return }
+    let generation = preloadGeneration
 
     DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.12) {
+      if generation != self.preloadGeneration {
+        self.endHighPreload()
+        return
+      }
+
       let snapshot = self.getPreloadSnapshot()
 
-      if snapshot.shouldStop {
+      if snapshot.shouldStop || generation != self.preloadGeneration {
         self.endHighPreload()
         return
       }
@@ -885,6 +1186,11 @@ public class JpMediaThumbnailsModule: Module {
       var index = self.getHighPreloadIndex()
 
       while index < snapshot.assetIds.count && batchIds.count < snapshot.highBatchSize {
+        if generation != self.preloadGeneration {
+          self.endHighPreload()
+          return
+        }
+
         let assetId = snapshot.assetIds[index]
         index += 1
 
@@ -925,7 +1231,13 @@ public class JpMediaThumbnailsModule: Module {
           quality: "high"
         )
 
-        if self.getMemoryCachedUri(for: highKey, quality: "high") != nil {
+        if let uri = self.getMemoryCachedUri(for: highKey, quality: "high") {
+          self.emitThumbnailReady(
+            assetId: assetId,
+            quality: "high",
+            uri: uri,
+            sourceGeneration: snapshot.sourceGeneration
+          )
           continue
         }
 
@@ -941,7 +1253,12 @@ public class JpMediaThumbnailsModule: Module {
           if FileManager.default.fileExists(atPath: highURL.path) {
             let uri = highURL.absoluteString
             self.setMemoryCachedUri(uri, for: highKey, quality: "high")
-            self.emitThumbnailReady(assetId: assetId, quality: "high", uri: uri)
+            self.emitThumbnailReady(
+              assetId: assetId,
+              quality: "high",
+              uri: uri,
+              sourceGeneration: snapshot.sourceGeneration
+            )
             continue
           }
         } catch {
@@ -954,12 +1271,18 @@ public class JpMediaThumbnailsModule: Module {
         batchIds.append(assetId)
       }
 
-      self.setHighPreloadIndex(index >= snapshot.assetIds.count ? 0 : index)
+      if generation != self.preloadGeneration {
+        self.endHighPreload()
+        return
+      }
+
+      // Do not wrap back to 0 here for the same reason as fast preload.
+      self.setHighPreloadIndex(min(index, snapshot.assetIds.count))
 
       guard !batchIds.isEmpty else {
         self.endHighPreload()
 
-        if self.hasPendingHighPreload() {
+        if self.hasPendingHighPreload() && generation == self.preloadGeneration {
           self.scheduleHighPreload()
         }
 
@@ -1003,10 +1326,15 @@ public class JpMediaThumbnailsModule: Module {
       }
 
       dispatchGroup.notify(queue: .main) {
+        if generation != self.preloadGeneration {
+          self.endHighPreload()
+          return
+        }
+
         self.endHighPreload()
 
         let current = self.getPreloadSnapshot()
-        if self.hasPendingHighPreload() && !current.shouldStop {
+        if self.hasPendingHighPreload() && !current.shouldStop && generation == self.preloadGeneration {
           self.scheduleHighPreload()
         }
       }
