@@ -28,6 +28,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { CircleCancel } from '@/assets/icons/icon';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const NUM_COLUMNS = 4;
@@ -138,10 +139,20 @@ export default function PostMediaPickerScreen() {
     videos: null,
   });
 
+  // Per-quality JS-side caches keyed by assetId. They are mirrors of what we
+  // have already shown to the user, *not* the native disk/memory cache. They
+  // exist for one specific reason: the event listener below uses them to
+  // enforce "high quality wins" — once we've recorded a high URI for an asset,
+  // a later fast event for the same asset must be ignored so we don't
+  // visibly downgrade the thumbnail.
   const fastThumbnailMapRef = useRef<Map<string, string>>(new Map());
   const highThumbnailMapRef = useRef<Map<string, string>>(new Map());
   const highThumbnailLoadingRef = useRef<Set<string>>(new Set());
 
+  // Native events can arrive in bursts (every preload batch fans out dozens of
+  // them). Calling setState per event would re-render the FlatList each time.
+  // Instead we buffer incoming patches in a Map keyed by assetId (newest URI
+  // wins) and flush them all in a single setState on the next animation frame.
   const pendingThumbnailPatchMapRef = useRef<Map<string, string>>(new Map());
   const patchFlushScheduledRef = useRef(false);
   const patchFlushAnimationFrameRef = useRef<number | null>(null);
@@ -154,8 +165,23 @@ export default function PostMediaPickerScreen() {
   const autoPagingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const lastPreloadSignatureRef = useRef('');
+
+  // Mirror of `assets.map(a => a.id)` as a Set, refreshed via a useEffect below.
+  // The event listener consults this to drop events for assets that are no
+  // longer in view — typically late events from a previous album whose IDs
+  // don't exist in the new album. This is *in addition* to the
+  // sourceGeneration filter; the two guards are layered because they protect
+  // against different races (generation handles "old work, new album",
+  // membership handles "asset removed from list via pagination/reset").
   const currentAssetIdSetRef = useRef<Set<string>>(new Set());
 
+  // The source generation we currently consider authoritative. Bumped each
+  // time beginNewSource() resolves with a new value from native. Every
+  // onThumbnailReady event whose sourceGeneration is *less than* this value
+  // is from work that started under a previous source and must be dropped —
+  // even if its assetId happens to also exist in the new source's list.
+  // Initial value 0 matches native's initial activeSourceGeneration, so any
+  // events emitted before the first beginNewSource() are still accepted.
   const currentSourceGenerationRef = useRef<number>(0);
 
   const previewHeight = useSharedValue(0);
@@ -227,6 +253,7 @@ export default function PostMediaPickerScreen() {
         return { ...item, thumbnailUri: nextThumb };
       });
 
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       return changed ? next : prev;
     });
   }, []);
@@ -314,25 +341,24 @@ export default function PostMediaPickerScreen() {
     [],
   );
 
+  // Keep currentAssetIdSetRef in sync with the currently displayed assets so
+  // the event listener (below) can membership-check an incoming assetId in
+  // O(1). This effect runs after every assets mutation; the listener's closure
+  // reads through the ref so it never has a stale snapshot.
   useEffect(() => {
     currentAssetIdSetRef.current = new Set(assets.map((item) => item.id));
   }, [assets]);
 
   useEffect(() => {
-    JpMediaThumbnails.debugGetPreloadGeneration()
-      .then((generation) => {
-        console.log('[debugGetPreloadGeneration]', {
-          activeBucket,
-          activeAlbumId,
-          generation,
-          sourceGeneration: currentSourceGenerationRef.current,
-        });
-      })
-      .catch((error) => {
-        console.log('[debugGetPreloadGeneration][failed]', error);
-      });
+    JpMediaThumbnails.debugGetPreloadGeneration().then();
   }, [activeBucket, activeAlbumId]);
 
+  // Drive the native preload engine off the current asset list. We
+  // signature-check against the previous run so that benign re-renders
+  // (e.g. a thumbnail patch landing) don't redundantly restart preloading.
+  // The actual source change is handled separately via beginNewSource() —
+  // by the time we get here, native already knows about the new source and
+  // events from this preload will carry the new sourceGeneration.
   useEffect(() => {
     if (assets.length === 0) return;
 
@@ -346,16 +372,7 @@ export default function PostMediaPickerScreen() {
     lastPreloadSignatureRef.current = signature;
 
     JpMediaThumbnails.debugGetPreloadGeneration()
-      .then((generation) => {
-        console.log('[startPreloading target]', {
-          activeBucket,
-          activeAlbumId,
-          assetsLength: assets.length,
-          firstId: assetIds[0],
-          generation,
-          sourceGeneration: currentSourceGenerationRef.current,
-        });
-      })
+      .then()
       .catch(() => {});
 
     JpMediaThumbnails.startPreloading(assetIds, {
@@ -366,20 +383,54 @@ export default function PostMediaPickerScreen() {
     }).catch(() => {});
   }, [activeAlbumId, activeBucket, assets]);
 
+  // Single onThumbnailReady listener. Previously there were two effects
+  // registering this same event — every native event was processed twice and
+  // the unguarded one could downgrade a high thumbnail back to fast. The
+  // listener below runs four guards in order; each guard protects against a
+  // distinct race so they can't be collapsed into one check.
+  //
+  //   1. sourceGeneration filter: drop events from work that started under a
+  //      previous album/bucket. Native may still finish a PHImageManager
+  //      request that began before the user switched sources, and we must
+  //      not paint that result into the new view.
+  //
+  //   2. asset-membership filter: drop events for asset IDs that aren't
+  //      currently visible. Most stale events are already caught by guard 1,
+  //      but this handles the rare case where the user goes A → B → A
+  //      quickly and an event from the first A visit lands during the
+  //      second A visit with a still-valid generation but for an asset that
+  //      was paginated away.
+  //
+  //   3. quality precedence (high path): a "high" event is always
+  //      authoritative. We write it into BOTH maps so that the fast-side
+  //      guard below sees it on subsequent fast events.
+  //
+  //   4. quality precedence (fast path): if we already have a high entry for
+  //      this asset, drop the fast event entirely. Native already enforces
+  //      this same invariant via shouldEmitThumbnailReady, but JS keeps its
+  //      own check because direct getThumbnail(quality: "fast") calls from
+  //      JS may race with high preload completions.
+  //
+  // Effect deps: only enqueueThumbnailPatch (stable). We intentionally avoid
+  // depending on `assets` so we don't tear the listener down on every
+  // pagination append — the listener reads through refs to stay current.
   useEffect(() => {
     const subscription = JpMediaThumbnails.addListener(
       'onThumbnailReady',
       ({ assetId, quality, uri, sourceGeneration }) => {
         if (!uri) return;
 
+        // (1) Stale-source guard.
         if (sourceGeneration < currentSourceGenerationRef.current) {
           return;
         }
 
+        // (2) Membership guard.
         if (!currentAssetIdSetRef.current.has(assetId)) {
           return;
         }
 
+        // (3) High wins — record in both maps so (4) catches later fast events.
         if (quality === 'high') {
           const prevHigh = highThumbnailMapRef.current.get(assetId);
           if (prevHigh === uri) return;
@@ -390,10 +441,12 @@ export default function PostMediaPickerScreen() {
           return;
         }
 
+        // (4) Don't allow fast to overwrite a known high.
         if (highThumbnailMapRef.current.has(assetId)) {
           return;
         }
 
+        // Fast event dedupe — skip if same URI already coalesced.
         const prevFast = fastThumbnailMapRef.current.get(assetId);
         if (prevFast === uri) return;
 
@@ -412,6 +465,7 @@ export default function PostMediaPickerScreen() {
       if (bucket === 'recent') return systemAlbumIds.recent;
       if (bucket === 'favorites') return systemAlbumIds.favorites;
       if (bucket === 'videos') return systemAlbumIds.videos;
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       if (bucket === 'albums') return explicitAlbumId;
       return null;
     },
@@ -448,6 +502,20 @@ export default function PostMediaPickerScreen() {
     setActivePreviewId(null);
   }, []);
 
+  // Tells native to start a new "source" (album/bucket) and updates our local
+  // expected-generation ref with the value native returns. Must be awaited
+  // BEFORE the new loadAssets() so that:
+  //
+  //   - Native has torn down any preload work from the previous source.
+  //   - currentSourceGenerationRef holds the new value before any new event
+  //     can arrive — i.e. the listener will see the new generation and accept
+  //     events tagged with it, while still rejecting any straggler events
+  //     from the previous source (which carry the old generation).
+  //
+  // Local state (caches, asset list, pending patches) is cleared separately
+  // by resetAssetState() right before this is called. The split is
+  // intentional: resetAssetState is synchronous JS-only cleanup; beginNewSource
+  // is an async native handshake.
   const beginNewSource = useCallback(async (bucket: MediaBucketKey, albumId: string | null) => {
     if (!albumId) {
       throw new Error(`beginNewSource called without albumId for bucket: ${bucket}`);
@@ -456,11 +524,6 @@ export default function PostMediaPickerScreen() {
     const nextSourceKey = makeSourceKey(bucket, albumId);
     const nextGeneration = await JpMediaThumbnails.setActiveSource(nextSourceKey);
     currentSourceGenerationRef.current = nextGeneration;
-
-    console.log('[setActiveSource]', {
-      sourceKey: nextSourceKey,
-      sourceGeneration: nextGeneration,
-    });
 
     return nextGeneration;
   }, []);
@@ -544,8 +607,8 @@ export default function PostMediaPickerScreen() {
     }
   }, [loadAlbums, requestPermission, resetAssetState]);
 
-  useEffect(() => {
-    return () => {
+  useEffect(
+    () => () => {
       try {
         JpMediaThumbnails.stopPreloading();
       } catch {
@@ -565,8 +628,9 @@ export default function PostMediaPickerScreen() {
         autoPagingTimerRef.current = null;
       }
       autoPagingRunningRef.current = false;
-    };
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (assets.length === 0) return;
@@ -579,6 +643,16 @@ export default function PostMediaPickerScreen() {
     bootstrap().then();
   }, [bootstrap]);
 
+  // Initial source bootstrap once the Recents album id is known. This is the
+  // first time we set up a source on the native side. The ordering matters:
+  //   1. resetAssetState() clears any local state from the prior session.
+  //   2. beginNewSource() awaits native's setActiveSource and stores the new
+  //      generation. After this resolves, our listener is calibrated to
+  //      accept events tagged with the new generation.
+  //   3. loadAssets() fetches the first page; the resulting assets trigger
+  //      the preload useEffect above, which calls startPreloading. All
+  //      events emitted from that preload carry the post-handshake
+  //      sourceGeneration, so the listener accepts them.
   useEffect(() => {
     if (!systemAlbumIds.recent) return;
 
@@ -602,7 +676,7 @@ export default function PostMediaPickerScreen() {
     };
 
     initializeRecent().catch((error) => {
-      console.log('[initializeRecent][failed]', error);
+      console.error('[initializeRecent][failed]', error);
     });
   }, [beginNewSource, loadAssets, resetAssetState, systemAlbumIds.recent]);
 
@@ -620,12 +694,19 @@ export default function PostMediaPickerScreen() {
     });
   }, [selectedIds]);
 
-  const selectedAssets = useMemo(() => {
-    const assetMap = new Map(assets.map((asset) => [asset.id, asset]));
-    return selectedIds
-      .map((id) => assetMap.get(id))
-      .filter((asset): asset is PickerAsset => Boolean(asset));
-  }, [assets, selectedIds]);
+  const assetMap = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
+
+  const selectedAssets = useMemo(
+    () =>
+      selectedIds
+        .map((id) => assetMap.get(id))
+        .filter((asset): asset is PickerAsset => Boolean(asset)),
+    [assetMap, selectedIds],
+  );
+
+  const selectedCancel = (id: string) => {
+    setSelectedIds((prev) => prev.filter((asset) => asset !== id));
+  };
 
   const activePreviewAsset = useMemo(() => {
     if (!activePreviewId) return null;
@@ -715,12 +796,10 @@ export default function PostMediaPickerScreen() {
       const adjustedTranslationY =
         event.translationY < 0 ? event.translationY * 1.35 : event.translationY;
 
-      const nextHeight = Math.max(
+      previewHeight.value = Math.max(
         PREVIEW_MIN_HEIGHT,
         Math.min(PREVIEW_MAX_HEIGHT, dragStartHeight.value + adjustedTranslationY),
       );
-
-      previewHeight.value = nextHeight;
     })
     .onEnd(() => {
       if (selectedCount.value <= 0) {
@@ -736,13 +815,16 @@ export default function PostMediaPickerScreen() {
       });
     });
 
-  const previewAnimatedStyle = useAnimatedStyle(() => {
-    return {
-      height: previewHeight.value,
-      opacity: PREVIEW_MAX_HEIGHT === 0 ? 0 : previewHeight.value / PREVIEW_MAX_HEIGHT,
-    };
-  });
+  const previewAnimatedStyle = useAnimatedStyle(() => ({
+    height: previewHeight.value,
+    opacity: PREVIEW_MAX_HEIGHT === 0 ? 0 : previewHeight.value / PREVIEW_MAX_HEIGHT,
+  }));
 
+  // User switched to a system bucket (Recents/Videos/Favorites). The
+  // resetAssetState → beginNewSource → loadAssets sequence is the
+  // canonical "source change" flow; see beginNewSource for the rationale.
+  // The "albums" case is intentionally not a source change — we just open
+  // the picker sheet and let applyAlbum perform the real switch.
   const applyBucket = useCallback(
     async (bucket: MediaBucketKey) => {
       setMenuOpen(false);
@@ -754,7 +836,7 @@ export default function PostMediaPickerScreen() {
 
       const nextAlbumId = getAlbumIdForBucket(bucket, null);
       if (!nextAlbumId) {
-        console.log('[applyBucket] missing album id for bucket', { bucket });
+        console.error('[applyBucket] missing album id for bucket', { bucket });
         return;
       }
 
@@ -767,6 +849,7 @@ export default function PostMediaPickerScreen() {
         setActiveAlbumTitle('최근 항목');
       } else if (bucket === 'videos') {
         setActiveAlbumTitle('동영상');
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       } else if (bucket === 'favorites') {
         setActiveAlbumTitle('즐겨찾기');
       }
@@ -782,6 +865,9 @@ export default function PostMediaPickerScreen() {
     [beginNewSource, getAlbumIdForBucket, loadAssets, resetAssetState],
   );
 
+  // User picked a user-created album from the sheet. Same source-change
+  // discipline as applyBucket: clear local state, await beginNewSource so the
+  // generation ref is up to date before any new events can land, then load.
   const applyAlbum = useCallback(
     async (album: NativeAlbum) => {
       setAlbumsSheetOpen(false);
@@ -940,22 +1026,39 @@ export default function PostMediaPickerScreen() {
                     const isActive = item.id === activePreviewId;
 
                     return (
-                      <Pressable
-                        onPress={() => setActivePreviewId(item.id)}
+                      <View
                         style={[styles.previewStripItem, isActive && styles.previewStripItemActive]}
                       >
-                        {item.thumbnailUri ? (
-                          <Image
-                            source={{ uri: item.thumbnailUri }}
-                            style={styles.previewStripImage}
-                            contentFit="cover"
-                            cachePolicy="memory-disk"
-                            transition={0}
-                          />
-                        ) : (
-                          <View style={styles.previewStripPlaceholder} />
-                        )}
-                      </Pressable>
+                        <Pressable onPress={() => setActivePreviewId(item.id)}>
+                          {item.thumbnailUri ? (
+                            <>
+                              <Image
+                                source={{ uri: item.thumbnailUri }}
+                                style={styles.previewStripImage}
+                                contentFit="cover"
+                                cachePolicy="memory-disk"
+                                transition={0}
+                              />
+                              <Pressable
+                                onPress={() => selectedCancel(item.id)}
+                                style={{
+                                  position: 'absolute',
+                                  top: 2,
+                                  right: 2,
+                                  width: 16,
+                                  height: 16,
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                              >
+                                <CircleCancel width={16} height={16} color="#000000" />
+                              </Pressable>
+                            </>
+                          ) : (
+                            <View style={styles.previewStripPlaceholder} />
+                          )}
+                        </Pressable>
+                      </View>
                     );
                   }}
                 />

@@ -141,3 +141,22 @@ export function Home({ width, height, color }: IconProps) {
     </Svg>
   );
 }
+
+export function CircleCancel({ width, height, color }: IconProps) {
+  return (
+    <Svg
+      width={width}
+      height={height}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth={2}
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <Circle cx="12" cy="12" r="10" />
+      <Path d="m15 9-6 6" />
+      <Path d="m9 9 6 6" />
+    </Svg>
+  );
+}
