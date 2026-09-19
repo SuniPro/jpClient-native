@@ -17,11 +17,12 @@ export type JpMediaThumbnailsViewProps = {
 export type StartPreloadingOptions = {
   width: number;
   height: number;
-  fastBatchSize: number;
-  highBatchSize: number;
 };
 
-export type ThumbnailQuality = 'fast' | 'high';
+export type ThumbnailQuality = {
+  width: number;
+  height: number;
+};
 
 export type ThumbnailOptions = {
   width: number;
@@ -39,16 +40,7 @@ export type ThumbnailOptions = {
  * sourceGeneration is older, which prevents late events from a previous album
  * or source from mutating the current screen state.
  */
-export type ThumbnailReadyEvent = {
-  assetId: string;
-  quality: ThumbnailQuality;
-  uri: string;
-  sourceGeneration: number;
-};
-
-export type JpMediaThumbnailsModuleEvents = {
-  onThumbnailReady: (event: ThumbnailReadyEvent) => void;
-};
+export type JpMediaThumbnailsModuleEvents = Record<string, never>;
 
 export type ThumbnailBatchResult = Record<string, string | null>;
 
@@ -57,6 +49,7 @@ export type NativeAlbum = {
   title: string;
   count: number;
   type: 'smart' | 'user';
+  systemKey?: 'recent' | 'favorites' | 'videos';
 };
 
 /**

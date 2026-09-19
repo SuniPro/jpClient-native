@@ -18,19 +18,7 @@ declare class JpMediaThumbnailsModule extends NativeModule<JpMediaThumbnailsModu
 
   startPreloading(assetIds: string[], options: StartPreloadingOptions): Promise<null>;
 
-  stopPreloading(): void;
-
-  /**
-   * Called when JS switches to a new gallery source (album / smart album / bucket).
-   *
-   * Native should bump its internal sourceGeneration, clear any preload state
-   * that belongs to the previous source, and return the new generation value.
-   *
-   * JS stores the returned generation in a ref and ignores any later
-   * onThumbnailReady event whose sourceGeneration is lower than that ref,
-   * because that event belongs to stale work from the previous source.
-   */
-  setActiveSource(sourceId: string): Promise<number>;
+  stopPreloading(): Promise<null>;
 
   getAlbums(): Promise<Array<NativeAlbum>>;
 
@@ -52,8 +40,6 @@ declare class JpMediaThumbnailsModule extends NativeModule<JpMediaThumbnailsModu
     albumId?: string | null;
     bucket: 'recent' | 'videos' | 'favorites' | 'albums';
   }): Promise<NativeAssetsPage>;
-
-  debugGetPreloadGeneration(): Promise<number>;
 }
 
 export default requireNativeModule<JpMediaThumbnailsModule>('JpMediaThumbnails');
