@@ -2,6 +2,8 @@ import { ViewStyle } from 'react-native';
 import { radius } from './radius';
 import { space, spacing } from './spacing';
 import { typography } from './typography';
+import { palette } from './palette';
+import { font } from './font';
 
 export type AppTheme = {
   dark: boolean;
@@ -54,4 +56,6 @@ export type AppTheme = {
     accent: ViewStyle;
   };
   typography: typeof typography;
+  palette: typeof palette;
+  font: typeof font;
 };

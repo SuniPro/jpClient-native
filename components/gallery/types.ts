@@ -31,6 +31,10 @@ export type EditorDraft = {
  * FlatList 의 Image 태그를 이루는 핵심 타입입니다.
  *
  * photo, video 타입으로 구분됩니다.
+ *
+ * Key Type of FLatList image tag
+ *
+ * it distinguish photo and video
  * */
 export type PickerAsset = {
   id: string;
@@ -51,13 +55,6 @@ export type PickerAlbum = {
 export type AlbumMenuItem = {
   key: MediaBucketKey;
   label: string;
-};
-
-export type NativeAlbum = {
-  id: string;
-  title: string;
-  count: number;
-  type: 'smart' | 'user';
 };
 
 export type MediaBucketKey = 'recent' | 'videos' | 'favorites' | 'albums';
