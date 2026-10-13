@@ -6,7 +6,6 @@ import { getSelectedRegion, saveSelectedRegion } from '@/storage/regionStorage';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import {router} from "expo-router";
 
 type RegionIndicator = {
   type: 'countrySelected' | 'citySelected';
@@ -74,7 +73,7 @@ export default function SelectRegionScreen() {
             <Button
               variant="solid"
               color="primary"
-              label={'move'}
+              label="move"
               size="md"
               onPress={handleMoveToRegion}
             />

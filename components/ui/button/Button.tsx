@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { ReactNode } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -8,6 +8,8 @@ import {
   type PressableProps,
   type StyleProp,
   type ViewStyle,
+  type TextStyle,
+  GestureResponderEvent,
 } from 'react-native';
 
 import { useTheme } from '@/theme';
@@ -16,7 +18,7 @@ import { createButtonTokens } from './button.tokens';
 import type { ButtonColor, ButtonSize, ButtonVariant } from './button.types';
 
 export type ButtonProps = Omit<PressableProps, 'style' | 'children'> & {
-  label: string;
+  label: ReactNode;
   variant?: ButtonVariant;
   color?: ButtonColor;
   size?: ButtonSize;
@@ -26,6 +28,8 @@ export type ButtonProps = Omit<PressableProps, 'style' | 'children'> & {
   leftIcon?: IconElement;
   rightIcon?: IconElement;
   style?: StyleProp<ViewStyle>;
+  textStyle?: StyleProp<TextStyle>;
+  onPressIn?: (event: GestureResponderEvent) => void;
 };
 
 export default function Button({
@@ -39,7 +43,9 @@ export default function Button({
   leftIcon,
   rightIcon,
   style,
+  textStyle,
   onPress,
+  onPressIn,
   ...props
 }: ButtonProps) {
   const theme = useTheme();
@@ -56,6 +62,7 @@ export default function Button({
       accessibilityState={{ disabled: isDisabled, busy: loading }}
       disabled={isDisabled}
       onPress={onPress}
+      onPressIn={onPressIn}
       style={({ pressed, hovered }) => {
         const state = isDisabled ? 'disabled' : pressed || hovered ? 'active' : 'default';
 
@@ -70,7 +77,7 @@ export default function Button({
             backgroundColor: visual.backgroundColor,
             borderColor: visual.borderColor,
             borderWidth: visual.borderWidth,
-            width: fullWidth ? '100%' : undefined,
+            width: fullWidth ? '100%' : 'auto',
           },
           style,
         ];
@@ -104,9 +111,9 @@ export default function Button({
                       color: visual.textColor,
                       fontSize: typographyToken.fontSize,
                       lineHeight: typographyToken.lineHeight,
-                      fontWeight: typographyToken.fontWeight,
                       letterSpacing: typographyToken.letterSpacing,
                     },
+                    textStyle,
                   ]}
                 >
                   {label}

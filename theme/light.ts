@@ -4,6 +4,7 @@ import { shadows } from './shadows';
 import { space, spacing } from './spacing';
 import type { AppTheme } from './types';
 import { typography } from './typography';
+import { font } from './font';
 
 export const lightTheme: AppTheme = {
   dark: false,
@@ -53,4 +54,6 @@ export const lightTheme: AppTheme = {
   radius,
   shadows,
   typography,
+  palette,
+  font,
 };

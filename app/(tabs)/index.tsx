@@ -8,21 +8,27 @@ import { useCallback, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CardSlide } from '@/components/ui/slide/CardSlide/CardSlide';
 import { CardProps } from '@/components/ui/slide/CardSlide/Card';
+import { AppText } from '@/components/Text';
 
 const COLLECTION_CONTENTS: CardProps[] = [
   {
+    id: '1',
     image: 'https://picsum.photos/800/400?1',
   },
   {
+    id: '2',
     image: 'https://picsum.photos/800/400?2',
   },
   {
+    id: '3',
     image: 'https://picsum.photos/800/400?3',
   },
   {
+    id: '4',
     image: 'https://picsum.photos/800/400?4',
   },
   {
+    id: '5',
     image: 'https://picsum.photos/800/400?5',
   },
 ];
@@ -54,6 +60,7 @@ export default function HomeScreen() {
         contentContainerStyle={{ gap: 20, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >
+        <AppText>Test</AppText>
         <CardSlide imageAssets={COLLECTION_CONTENTS} />
       </ScrollView>
     </SafeAreaView>

@@ -30,7 +30,6 @@ export function AppText({ variant = 'body1', color = 'primary', style, ...props 
           fontFamily: typo.fontFamily,
           fontSize: typo.fontSize,
           lineHeight: typo.lineHeight,
-          fontWeight: typo.fontWeight,
           letterSpacing: typo.letterSpacing,
           color: colorMap[color],
         },
