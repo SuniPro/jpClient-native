@@ -495,30 +495,14 @@ export default function MediaPickerScreen() {
       try {
         // reset 요청은 첫 페이지이므로 cursor를 전달하지 않는다.
         if (!albumId) {
-          console.log('[loadAssets:SKIPPED]', {
-            albumId,
-            loading: loadingRef.current,
-          });
           return null;
         }
-
-        console.log('[loadAssets:NATIVE_REQUEST]', {
-          albumId,
-          first,
-          reset,
-          cursor: reset ? null : endCursorRef.current,
-        });
 
         const result = await JpMediaThumbnails.getAssetsInAlbum(
           albumId,
           first,
           reset ? null : endCursorRef.current,
         );
-
-        console.log('[loadAssets:NATIVE_RESPONSE]', {
-          count: result.assets.length,
-          hasNextPage: result.hasNextPage,
-        });
 
         // Native 모델을 화면용 모델로 변환한다.
         const mapped = result.assets.map(toPickerAssetFromNative);
@@ -558,7 +542,7 @@ export default function MediaPickerScreen() {
         setLoading(false);
       }
     },
-    [appendAssets, loadThumbnails, setAssets, setGalleryMeta],
+    [appendAssets, setAssets, setGalleryMeta],
   );
 
   /**
@@ -613,8 +597,6 @@ export default function MediaPickerScreen() {
    * 다음 앨범에 섞지 않기 위해 호출한다.
    */
   const resetPickerSession = useCallback(() => {
-    console.log('[RESET] resetPickerSession called');
-    console.trace('[RESET] resetPickerSession stack');
     endCursorRef.current = null;
 
     setAssets([]);
@@ -628,15 +610,9 @@ export default function MediaPickerScreen() {
   }, [clearSelection, setAssets, setGalleryMeta]);
 
   // 현재는 resetPickerSession을 그대로 호출하는 래퍼 함수다.
-  const resetAssetState = useCallback(
-    (reason: string) => {
-      console.log('[RESET TRACE] resetAssetState called');
-      console.trace('[RESET TRACE] resetAssetState caller');
-      console.log('[RESET REASON]', reason);
-      resetPickerSession();
-    },
-    [resetPickerSession],
-  );
+  const resetAssetState = useCallback(() => {
+    resetPickerSession();
+  }, [resetPickerSession]);
 
   /**
    * 화면 초기화의 시작점.
@@ -672,7 +648,7 @@ export default function MediaPickerScreen() {
         activeAlbumTitle: '최근 항목',
       });
 
-      resetAssetState('bootstrap');
+      resetAssetState();
     } finally {
       setBootstrapping(false);
     }
@@ -739,11 +715,6 @@ export default function MediaPickerScreen() {
    * 따라서 중복 초기화 및 비동기 경쟁 상태 가능성은 별도 검토가 필요하다.
    */
   useEffect(() => {
-    console.log('[recentEffect]', {
-      recentAlbumId: systemAlbumIds.recent,
-      assetsCount: assets.length,
-      activeAlbumId,
-    });
     if (activeAlbumId != null) {
       return;
     }
@@ -753,14 +724,13 @@ export default function MediaPickerScreen() {
     }
 
     const initializeRecent = async () => {
-      console.log('[RESET] recentEffect is initializing gallery');
       const nextAlbumId = systemAlbumIds.recent;
 
       if (!nextAlbumId) {
         return;
       }
 
-      resetAssetState('initializeRecent');
+      resetAssetState();
 
       setGalleryMeta({
         activeBucket: 'recent',
@@ -1014,27 +984,13 @@ export default function MediaPickerScreen() {
 
       const nextAlbumId = getAlbumIdForBucket(bucket, null);
 
-      console.log('[AlbumDebug:resolve]', {
-        bucket,
-        nextAlbumId,
-        systemAlbumIds,
-        matchingAlbum: albums.find((album) => album.id === nextAlbumId) ?? null,
-      });
-
       if (!nextAlbumId) {
-        console.error('[applyBucket] missing album id for bucket', {
-          bucket,
-        });
-
         return;
       }
 
       await JpMediaThumbnails.stopPreloading();
 
-      console.log('[RESET] resetAssetState called');
-      console.trace('[RESET] resetAssetState stack');
-
-      resetAssetState('applyBucket');
+      resetAssetState();
 
       const nextTitle =
         bucket === 'recent' ? '최근 항목' : bucket === 'videos' ? '동영상' : '즐겨찾기';
@@ -1067,7 +1023,7 @@ export default function MediaPickerScreen() {
 
       await JpMediaThumbnails.stopPreloading();
 
-      resetAssetState('applyAlbum');
+      resetAssetState();
 
       setGalleryMeta({
         activeBucket: 'albums',
