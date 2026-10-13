@@ -238,6 +238,21 @@ export default function MediaPickerScreen() {
    */
   const endCursorRef = useRef<string | null>(null);
 
+  const viewAbilityConfig = useRef({
+    itemVisiblePercentThreshold: 1,
+  }).current;
+
+  /**
+   * 한국어:
+   * 현재 Native 모듈에 요청 중인 썸네일 ID를 관리한다.
+   * 동일한 이미지에 대한 중복 요청을 방지한다.
+   *
+   * English:
+   * Tracks thumbnail IDs currently being requested.
+   * Prevents duplicate requests for the same asset.
+   */
+  const pendingThumbnailIdsRef = useRef<Set<string>>(new Set());
+
   const loadingRef = useRef(false);
   const loadingMoreRef = useRef(false);
 
@@ -324,28 +339,17 @@ export default function MediaPickerScreen() {
   }, []);
 
   /**
-   * Loads thumbnail URIs for exactly the
-   * assets passed by the current page.
+   * 한국어:
+   * 현재 필요한 asset ID에 대해서만 썸네일을 요청한다.
    *
-   * startPreloading() only warms PhotoKit's
-   * cache. getThumbnailBatch() is the actual
-   * URI-producing operation.
-   */
-  /**
-   * 전달받은 asset ID들의 썸네일을 Native에 요청한다.
+   * 이미 썸네일이 있거나 요청 중인 ID는 제외한다.
+   * Native 요청이 끝나면 pending 상태를 해제한다.
    *
-   * 1. startPreloading:
-   *    PhotoKit의 이미지 캐시를 미리 준비하도록 요청한다.
+   * English:
+   * Requests thumbnails only for the required asset IDs.
    *
-   * 2. getThumbnailBatch:
-   *    실제 썸네일 URI를 반환받는다.
-   *
-   * 3. updateAssetThumbnails:
-   *    반환된 URI를 Zustand의 해당 asset에 반영한다.
-   *
-   * 주의:
-   * 현재는 전달받은 모든 ID를 한 번에 batch 요청한다.
-   * 화면에 보이는 asset만 선별하거나 요청 개수를 제한하지 않는다.
+   * Skips assets that already have thumbnails or pending requests.
+   * Clears pending IDs when the native request completes.
    */
   const loadThumbnails = useCallback(
     async (assetIds: string[]) => {
@@ -353,51 +357,96 @@ export default function MediaPickerScreen() {
         return;
       }
 
-      const options = {
-        width: CELL_SIZE,
-        height: CELL_SIZE,
-      };
+      // 현재 Zustand 상태를 읽어 이미 준비된 썸네일을 제외한다.
+      const currentAssets = usePostGalleryStore.getState().assets;
 
-      console.log('[loadThumbnails:start]', assetIds.length);
+      const assetMap = new Map(currentAssets.map((asset) => [asset.id, asset]));
 
-      try {
-        // 캐시 준비 완료를 기다리지 않고 다음 작업을 진행한다.
-        // void는 Promise를 의도적으로 await하지 않는다는 표현이다.
-        void JpMediaThumbnails.startPreloading(assetIds, options).catch((error) => {
-          console.error('[startPreloading][failed]', error);
-        });
+      const idsToLoad = assetIds.filter((id) => {
+        const asset = assetMap.get(id);
 
-        // Native에서 썸네일 결과를 받을 때까지 이 함수의 실행을 기다린다.
-        const results = await JpMediaThumbnails.getThumbnailBatch(assetIds, options);
-
-        const successCount = Object.values(results).filter((uri) => Boolean(uri)).length;
-
-        console.log('[loadThumbnails:done]', assetIds.length, successCount);
-
-        // URI가 존재하는 결과만 Zustand 갱신 형식으로 변환한다.
-        const patches = Object.entries(results).flatMap(([id, uri]) =>
-          uri
-            ? [
-                {
-                  id,
-                  uri,
-                },
-              ]
-            : [],
-        );
-
-        if (patches.length === 0) {
-          return;
+        if (!asset || asset.thumbnailUri) {
+          return false;
         }
 
-        // Store의 thumbnailUri가 갱신되면 해당 asset을 사용하는 UI가 갱신된다.
-        updateAssetThumbnails(patches);
+        return !pendingThumbnailIdsRef.current.has(id);
+      });
+
+      if (idsToLoad.length === 0) {
+        return;
+      }
+
+      // 비동기 요청을 시작하기 전에 pending 상태를 등록한다.
+      idsToLoad.forEach((id) => {
+        pendingThumbnailIdsRef.current.add(id);
+      });
+
+      try {
+        const results = await JpMediaThumbnails.getThumbnailBatch(idsToLoad, {
+          width: CELL_SIZE,
+          height: CELL_SIZE,
+        });
+
+        const patches = Object.entries(results).flatMap(([id, uri]) => (uri ? [{ id, uri }] : []));
+
+        if (patches.length > 0) {
+          // 앨범 전환 후 도착한 결과가 현재 앨범에 섞이지 않도록
+          // 현재 store에 존재하는 ID만 반영한다.
+          const currentIds = new Set(
+            usePostGalleryStore.getState().assets.map((asset) => asset.id),
+          );
+
+          updateAssetThumbnails(patches.filter((patch) => currentIds.has(patch.id)));
+        }
       } catch (error) {
-        console.error('[getThumbnailBatch][failed]', error);
+        console.error('[loadThumbnails][failed]', error);
+      } finally {
+        idsToLoad.forEach((id) => {
+          pendingThumbnailIdsRef.current.delete(id);
+        });
       }
     },
     [updateAssetThumbnails],
   );
+
+  /**
+   * 한국어:
+   * FlatList에서 현재 화면에 보이는 asset이 변경되면 호출된다.
+   * 보이는 asset ID만 추출해 썸네일 요청을 시작한다.
+   *
+   * English:
+   * Called when the visible assets in FlatList change.
+   * Extracts visible asset IDs and requests their thumbnails.
+   */
+  const onViewableItemsChanged = useRef(
+    ({
+      viewableItems,
+    }: {
+      viewableItems: Array<{
+        item: PickerAsset;
+        isViewable: boolean;
+      }>;
+    }) => {
+      const visibleIds = viewableItems
+        .filter((token) => token.isViewable)
+        .map((token) => token.item.id);
+
+      void loadThumbnailsRef.current(visibleIds);
+    },
+  ).current;
+
+  /**
+   * 한국어:
+   * FlatList callback의 참조는 유지하면서
+   * 항상 최신 loadThumbnails 함수를 호출하기 위한 ref.
+   *
+   * English:
+   * Keeps the FlatList callback stable while ensuring
+   * it invokes the latest loadThumbnails function.
+   */
+  const loadThumbnailsRef = useRef(loadThumbnails);
+
+  loadThumbnailsRef.current = loadThumbnails;
 
   /**
    * Fetches one page of gallery assets.
@@ -445,13 +494,31 @@ export default function MediaPickerScreen() {
 
       try {
         // reset 요청은 첫 페이지이므로 cursor를 전달하지 않는다.
+        if (!albumId) {
+          console.log('[loadAssets:SKIPPED]', {
+            albumId,
+            loading: loadingRef.current,
+          });
+          return null;
+        }
+
+        console.log('[loadAssets:NATIVE_REQUEST]', {
+          albumId,
+          first,
+          reset,
+          cursor: reset ? null : endCursorRef.current,
+        });
+
         const result = await JpMediaThumbnails.getAssetsInAlbum(
           albumId,
           first,
           reset ? null : endCursorRef.current,
         );
 
-        console.log('[loadAssets]', result.assets.length);
+        console.log('[loadAssets:NATIVE_RESPONSE]', {
+          count: result.assets.length,
+          hasNextPage: result.hasNextPage,
+        });
 
         // Native 모델을 화면용 모델로 변환한다.
         const mapped = result.assets.map(toPickerAssetFromNative);
@@ -462,16 +529,15 @@ export default function MediaPickerScreen() {
           appendAssets(mapped);
         }
 
-        // 현재 페이지에서 반환된 asset들만 썸네일 요청 대상으로 삼는다.
-        // TODO asset이 썸네일을 그냥 같이 보관하면 안되나
-        const assetIds = result.assets.map((asset) => asset.id);
-
-        // Intentionally not awaited.
-        // Asset pagination should not wait for
-        // JPEG/file URI generation to finish.
-        // 의도적으로 await하지 않는다.
-        // 메타데이터 요청 완료와 썸네일 생성 완료를 분리하기 위함이다.
-        void loadThumbnails(assetIds);
+        // // 현재 페이지에서 반환된 asset들만 썸네일 요청 대상으로 삼는다.
+        // const assetIds = result.assets.map((asset) => asset.id);
+        //
+        // // Intentionally not awaited.
+        // // Asset pagination should not wait for
+        // // JPEG/file URI generation to finish.
+        // // 의도적으로 await하지 않는다.
+        // // 메타데이터 요청 완료와 썸네일 생성 완료를 분리하기 위함이다.
+        // void loadThumbnails(assetIds);
 
         // 다음 페이지를 요청할 때 사용할 cursor를 갱신한다.
         endCursorRef.current = result.endCursor ?? null;
@@ -547,6 +613,8 @@ export default function MediaPickerScreen() {
    * 다음 앨범에 섞지 않기 위해 호출한다.
    */
   const resetPickerSession = useCallback(() => {
+    console.log('[RESET] resetPickerSession called');
+    console.trace('[RESET] resetPickerSession stack');
     endCursorRef.current = null;
 
     setAssets([]);
@@ -560,9 +628,15 @@ export default function MediaPickerScreen() {
   }, [clearSelection, setAssets, setGalleryMeta]);
 
   // 현재는 resetPickerSession을 그대로 호출하는 래퍼 함수다.
-  const resetAssetState = useCallback(() => {
-    resetPickerSession();
-  }, [resetPickerSession]);
+  const resetAssetState = useCallback(
+    (reason: string) => {
+      console.log('[RESET TRACE] resetAssetState called');
+      console.trace('[RESET TRACE] resetAssetState caller');
+      console.log('[RESET REASON]', reason);
+      resetPickerSession();
+    },
+    [resetPickerSession],
+  );
 
   /**
    * 화면 초기화의 시작점.
@@ -585,7 +659,10 @@ export default function MediaPickerScreen() {
 
       await loadAlbums();
 
-      if (hasRestorableSession) {
+      // 비동기 작업이 끝난 시점의 최신 상태 확인
+      const { activeAlbumId } = usePostGalleryStore.getState();
+
+      if (activeAlbumId != null) {
         return;
       }
 
@@ -595,11 +672,11 @@ export default function MediaPickerScreen() {
         activeAlbumTitle: '최근 항목',
       });
 
-      resetAssetState();
+      resetAssetState('bootstrap');
     } finally {
       setBootstrapping(false);
     }
-  }, [hasRestorableSession, loadAlbums, requestPermission, resetAssetState, setGalleryMeta]);
+  }, [loadAlbums, requestPermission, resetAssetState, setGalleryMeta]);
 
   /**
    * Screen cleanup only.
@@ -662,7 +739,12 @@ export default function MediaPickerScreen() {
    * 따라서 중복 초기화 및 비동기 경쟁 상태 가능성은 별도 검토가 필요하다.
    */
   useEffect(() => {
-    if (hasRestorableSession) {
+    console.log('[recentEffect]', {
+      recentAlbumId: systemAlbumIds.recent,
+      assetsCount: assets.length,
+      activeAlbumId,
+    });
+    if (activeAlbumId != null) {
       return;
     }
 
@@ -671,13 +753,14 @@ export default function MediaPickerScreen() {
     }
 
     const initializeRecent = async () => {
+      console.log('[RESET] recentEffect is initializing gallery');
       const nextAlbumId = systemAlbumIds.recent;
 
       if (!nextAlbumId) {
         return;
       }
 
-      resetAssetState();
+      resetAssetState('initializeRecent');
 
       setGalleryMeta({
         activeBucket: 'recent',
@@ -695,7 +778,14 @@ export default function MediaPickerScreen() {
     void initializeRecent().catch((error) => {
       console.error('[initializeRecent][failed]', error);
     });
-  }, [hasRestorableSession, loadAssets, resetAssetState, setGalleryMeta, systemAlbumIds.recent]);
+  }, [
+    activeAlbumId,
+    assets.length,
+    loadAssets,
+    resetAssetState,
+    setGalleryMeta,
+    systemAlbumIds.recent,
+  ]);
 
   /**
    * 선택된 asset 목록에 맞춰 활성 미리보기 ID를 결정한다.
@@ -924,6 +1014,13 @@ export default function MediaPickerScreen() {
 
       const nextAlbumId = getAlbumIdForBucket(bucket, null);
 
+      console.log('[AlbumDebug:resolve]', {
+        bucket,
+        nextAlbumId,
+        systemAlbumIds,
+        matchingAlbum: albums.find((album) => album.id === nextAlbumId) ?? null,
+      });
+
       if (!nextAlbumId) {
         console.error('[applyBucket] missing album id for bucket', {
           bucket,
@@ -934,7 +1031,10 @@ export default function MediaPickerScreen() {
 
       await JpMediaThumbnails.stopPreloading();
 
-      resetAssetState();
+      console.log('[RESET] resetAssetState called');
+      console.trace('[RESET] resetAssetState stack');
+
+      resetAssetState('applyBucket');
 
       const nextTitle =
         bucket === 'recent' ? '최근 항목' : bucket === 'videos' ? '동영상' : '즐겨찾기';
@@ -967,7 +1067,7 @@ export default function MediaPickerScreen() {
 
       await JpMediaThumbnails.stopPreloading();
 
-      resetAssetState();
+      resetAssetState('applyAlbum');
 
       setGalleryMeta({
         activeBucket: 'albums',
@@ -1231,6 +1331,10 @@ export default function MediaPickerScreen() {
           keyExtractor={(item) => item.id}
           renderItem={renderAsset}
           numColumns={NUM_COLUMNS}
+
+          onViewableItemsChanged={onViewableItemsChanged}
+          viewabilityConfig={viewAbilityConfig}
+
           style={styles.list}
           initialNumToRender={24}
           maxToRenderPerBatch={24}
