@@ -5,9 +5,12 @@ import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
-
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { HeroUINativeProvider } from 'heroui-native';
+import { useTheme } from '@/theme';
+import { Uniwind } from 'uniwind';
+import '../global.css';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -17,6 +20,31 @@ SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const theme = useTheme();
+  const mode = colorScheme === 'dark' ? 'dark' : 'light';
+
+  const themeColors = theme.colors;
+
+  useEffect(() => {
+    Uniwind.setTheme(mode);
+
+    Uniwind.updateCSSVariables(mode, {
+      '--color-background': themeColors.backgroundPrimary,
+      '--color-foreground': themeColors.textPrimary,
+      '--color-primary': themeColors.primary,
+      '--color-default-200': themeColors.backgroundSecondary,
+      '--color-default-hover': themeColors.backgroundTertiary,
+      '--color-default-300': themeColors.borderPrimary,
+    });
+  }, [
+    mode,
+    themeColors.backgroundPrimary,
+    themeColors.backgroundSecondary,
+    themeColors.backgroundTertiary,
+    themeColors.borderPrimary,
+    themeColors.primary,
+    themeColors.textPrimary,
+  ]);
 
   const [fontsLoaded] = useFonts({
     Pretendard: require('@/assets/font/pretendard/Pretendard-Regular.otf'),
@@ -101,12 +129,18 @@ export default function RootLayout() {
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-          <Stack.Screen name="post" options={{ headerShown: false }} />
-        </Stack>
-        <StatusBar style="auto" />
+        <HeroUINativeProvider
+          config={{
+            devInfo: { stylingPrinciples: false },
+          }}
+        >
+          <Stack>
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+            <Stack.Screen name="post" options={{ headerShown: false }} />
+          </Stack>
+          <StatusBar style="auto" />
+        </HeroUINativeProvider>
       </GestureHandlerRootView>
     </ThemeProvider>
   );

@@ -8,7 +8,7 @@ import { AddLayerModal } from '@/components/feed/edit/post/AddLayerModal';
 import Button from '@/components/ui/button/Button';
 import { ArrowRight, HighWriter, LocateFixed, Return, Thermometer } from '@/assets/icons/icon';
 import { useNavigation } from 'expo-router';
-import { EditedMediaDraft, EditedMediaDraftMap } from '@/app/post/type';
+import { EditedMediaDraft, EditedMediaDraftMap } from '@/types/app/post/type';
 import { PickerAsset } from '@/components/gallery/types';
 import { CardProps } from '@/components/ui/slide/CardSlide/type';
 
@@ -37,7 +37,21 @@ export default function SelectedMediaEditScreen() {
   );
 
   useEffect(() => {
-    setEditedMediaDraftMap(CreateEditedMediaDraftMap(selectedAssets));
+    setEditedMediaDraftMap((prev) => {
+      const next: EditedMediaDraftMap = {};
+
+      for (const asset of selectedAssets) {
+        next[asset.id] = prev[asset.id] ?? {
+          asset,
+          previewUri: asset.thumbnailUri ?? asset.uri,
+          textLayers: [],
+          stickerLayers: [],
+          filterState: 'none',
+        };
+      }
+
+      return next;
+    });
   }, [selectedAssets]);
 
   const filteredAssets: CardProps[] = selectedAssets.map((asset) => {
@@ -45,7 +59,8 @@ export default function SelectedMediaEditScreen() {
 
     return {
       id: asset.id,
-      image: editedDraft.previewUri ?? asset.thumbnailUri ?? asset.uri,
+      image: editedDraft.asset.uri,
+      textLayers: editedDraft.textLayers,
     };
   });
 
@@ -108,21 +123,20 @@ export default function SelectedMediaEditScreen() {
           justifyContent: 'space-between',
           width: '100%',
           paddingHorizontal: 20,
-          marginBottom: 30,
+          // marginBottom: 30,
         }}
       >
         <Pressable onPress={navigation.goBack}>
-          <Return width={30} height={30} color="white" />
+          <Return width={24} height={24} color="white" />
         </Pressable>
         <Pressable>
-          <ArrowRight width={30} height={30} color="white" />
+          <ArrowRight width={24} height={24} color="white" />
         </Pressable>
       </View>
       <CardSlide
         imageAssets={filteredAssets}
         onSelectIndex={(index) => {
           const selectedAsset = filteredAssets[index];
-          if (!selectedAsset) return;
 
           setSelectedMediaId(selectedAsset.id);
         }}
@@ -139,23 +153,26 @@ export default function SelectedMediaEditScreen() {
           label={<LocateFixed width={20} height={20} color="white" />}
           size="xl"
           fullWidth={false}
-          variant="extra"
-          style={{ backgroundColor: '#2E3033' }}
+          variant="solid"
+          color="secondary"
+          style={{ backgroundColor: '#2E303300' }}
         />
         <Button
+          onPress={openTextEditor}
           label={<HighWriter width={20} height={20} color="white" />}
           size="xl"
           fullWidth={false}
-          variant="extra"
-          style={{ backgroundColor: '#2E3033' }}
-          onPress={openTextEditor}
+          variant="solid"
+          color="secondary"
+          style={{ backgroundColor: '#2E303300' }}
         />
         <Button
           label={<Thermometer width={20} height={20} color="white" />}
           size="xl"
           fullWidth={false}
-          variant="extra"
-          style={{ backgroundColor: '#2E3033' }}
+          variant="solid"
+          color="secondary"
+          style={{ backgroundColor: '#2E303300' }}
         />
       </View>
     </SafeAreaView>

@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Dimensions, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Dimensions, Modal, Pressable, StyleSheet, View, Alert } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { TextEditorPanel } from './textLayerEdit/TextEditorPanel';
 import Button from '@/components/ui/button/Button';
 import { Return, Save, Typography } from '@/assets/icons';
 import { useMediaLayerEditor } from '@/hooks/media/use-media-layer-editor';
-import { EditedMediaDraft } from '@/app/post/type';
+import { EditedMediaDraft } from '@/types/app/post/type';
 import { useTheme } from '@/theme';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -65,9 +65,9 @@ export function AddLayerModal({
     onClose();
   }, [clearLayers, onClose]);
 
-  const handlePressSave = useCallback(() => {
-    textEditorRef.current?.flushActiveLayer();
-  }, [textEditorRef]);
+  // const handlePressSave = useCallback(() => {
+  //   textEditorRef.current?.flushActiveLayer();
+  // }, [textEditorRef]);
 
   const handleConfirmDiscard = useCallback(() => {
     switch (editorModalInitialMode) {
@@ -96,7 +96,25 @@ export function AddLayerModal({
     };
 
     onSave(draft.asset.id, activeMediaContainLayer);
+    onClose();
   };
+
+  const handlePressSave = () => {
+    Alert.alert('변경사항 저장', '변경사항을 저장하시겠습니까?', [
+      {
+        text: '취소',
+        style: 'cancel',
+      },
+      {
+        text: '저장',
+        onPress: saveHandler,
+      },
+    ]);
+  };
+
+  useEffect(() => {
+    console.log(textLayers);
+  }, [textLayers]);
 
   return (
     <Modal
@@ -114,34 +132,21 @@ export function AddLayerModal({
             <Return width={20} height={20} color="white" />
           </Pressable>
 
-          <Pressable style={styles.topButton} onPress={saveHandler}>
+          <Pressable style={styles.topButton} onPress={handlePressSave}>
             <Save width={20} height={20} color="white" />
           </Pressable>
         </View>
         <View style={styles.canvasContainer}>
           <View style={styles.imageFrame}>
-            <Image
-              source={{ uri: draft.asset.uri }}
-              style={styles.image}
-              contentFit="cover"
-              cachePolicy="memory-disk"
-              transition={0}
-              onLayout={(e) => {
-                const { width, height } = e.nativeEvent.layout;
-
-                imageSizeRef.current = { width, height };
-              }}
-            />
-            {/* 이미지 및 스티커 추가 영역 */}
-            {/*{textLayers.map((layer) => (*/}
-            {/*  <SavedTextLayer*/}
-            {/*    key={layer.id}*/}
-            {/*    layer={layer}*/}
-            {/*    onSelect={handleSelectSavedTextLayer}*/}
-            {/*    onMove={handleMoveSavedTextLayer}*/}
-            {/*  />*/}
-            {/*))}*/}
-
+            <View style={styles.imageCanvas}>
+              <Image
+                source={{ uri: draft.asset.uri }}
+                style={StyleSheet.absoluteFill}
+                contentFit="cover"
+                cachePolicy="memory-disk"
+                transition={0}
+              />
+            </View>
             <TextEditorPanel
               ref={textEditorRef}
               textLayersState={{ textLayers, setTextLayers }}
@@ -207,9 +212,11 @@ const styles = StyleSheet.create({
     // borderWidth: 1,
     // borderColor: 'rgba(255,255,255,0.15)',
   },
-  image: {
+  imageCanvas: {
     width: IMAGE_WIDTH,
     height: IMAGE_HEIGHT,
+    position: 'relative',
+    overflow: 'hidden',
   },
   bottomActions: {
     position: 'absolute',

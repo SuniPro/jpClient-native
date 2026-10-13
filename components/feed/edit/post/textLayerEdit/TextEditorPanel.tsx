@@ -382,6 +382,7 @@ export const TextEditorPanel = forwardRef<TextEditorCommands, TextEditorPanelPro
           <SavedTextLayer
             key={layer.id}
             layer={layer}
+            editable
             onSelect={startEditingTextLayer}
             onMove={moveTextLayer}
           />

@@ -25,6 +25,8 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { CircleCancel } from '@/assets/icons/icon';
 import { usePostGalleryStore } from '@/stores/post-gallery.store';
 import { router } from 'expo-router';
+import { useToast } from 'heroui-native';
+import { useToastAlert } from '@/hooks/alert/use-alert';
 
 /* 화면 너비를 기준으로 갤러리의 셀 크기를 계산합니다.
  * columns 은 한 row 에 4개입니다.
@@ -164,6 +166,14 @@ const AssetCell = React.memo(function AssetCell({
 export default function MediaPickerScreen() {
   // 사진 접근 권한 state null 상태는 아직 권한 확인이 끝나지 않음을 의미
   const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
+
+  const { toast } = useToast();
+
+  const { showToast } = useToastAlert(
+    'warning',
+    '선택 개수 초과',
+    `사진은 최대 ${MAX_SELECTION_COUNT}개까지 선택할 수 있어요.`,
+  );
 
   // Native에서 가져온 앨범 목록.
   const [albums, setAlbums] = useState<NativeAlbum[]>([]);
@@ -558,6 +568,14 @@ export default function MediaPickerScreen() {
   useEffect(() => {
     endCursorRef.current = endCursor;
   }, [endCursor]);
+
+  console.log('[GALLERY_RENDER]', {
+    assetsCount: assets.length,
+    activeAlbumId,
+    hasRestorableSession,
+    bootstrapping,
+    loadingRef: loadingRef.current,
+  });
 
   /**
    * 사용자가 선택한 시스템 분류를 실제 Native 앨범 ID로 변환한다.
@@ -1062,12 +1080,13 @@ export default function MediaPickerScreen() {
       }
 
       if (selectedIds.length === MAX_SELECTION_COUNT) {
-        alert();
+        showToast();
+        return;
       }
 
       setSelectedIds([...selectedIds, assetId]);
     },
-    [multiSelectEnabled, selectedIds, setSelectedIds],
+    [multiSelectEnabled, selectedIds, setSelectedIds, toast],
   );
 
   const onToggleMultiSelect = useCallback(() => {

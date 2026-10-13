@@ -1,0 +1,6 @@
+@import 'tailwindcss';
+@import 'uniwind';
+@import 'heroui-native/styles';
+@theme static {
+    --theme: default;
+}

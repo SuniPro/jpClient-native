@@ -8,8 +8,9 @@ const DRAG_THRESHOLD = 8;
 
 export type SavedTextLayerProps = {
   layer: TextLayerDraft;
-  onSelect: (id: string) => void;
-  onMove: (id: string, x: number, y: number) => void;
+  onSelect?: (id: string) => void;
+  onMove?: (id: string, x: number, y: number) => void;
+  editable?: boolean;
 };
 
 /* Helper Functions */
@@ -94,12 +95,16 @@ export function SavedTextLayer({ layer, onSelect, onMove }: SavedTextLayerProps)
         const nextY = startRef.current.y + g.dy;
 
         if (distance(g.dx, g.dy) < DRAG_THRESHOLD) {
-          onSelectRef.current(currentLayer.id);
+          if (onSelectRef.current) {
+            onSelectRef.current(currentLayer.id);
+          }
           return;
         }
 
         pan.setValue({ x: nextX, y: nextY });
-        onMoveRef.current(currentLayer.id, nextX, nextY);
+        if (onMoveRef.current) {
+          onMoveRef.current(currentLayer.id, nextX, nextY);
+        }
       },
 
       onPanResponderTerminate: (_, g) => {
@@ -111,7 +116,9 @@ export function SavedTextLayer({ layer, onSelect, onMove }: SavedTextLayerProps)
 
         if (distance(g.dx, g.dy) >= DRAG_THRESHOLD) {
           pan.setValue({ x: nextX, y: nextY });
-          onMoveRef.current(currentLayer.id, nextX, nextY);
+          if (onMoveRef.current) {
+            onMoveRef.current(currentLayer.id, nextX, nextY);
+          }
         }
       },
     }),

@@ -1,4 +1,4 @@
-import { ScrollView, StyleSheet } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { SelectedRegion } from '@/components/globe/types';
 import { getSelectedRegion } from '@/storage/regionStorage';
@@ -7,8 +7,10 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CardSlide } from '@/components/ui/slide/CardSlide/CardSlide';
-import { CardProps } from '@/components/ui/slide/CardSlide/Card';
 import { AppText } from '@/components/Text';
+import { CardProps } from '@/components/ui/slide/CardSlide/type';
+import { Button, Card } from 'heroui-native';
+import { Ionicons } from '@expo/vector-icons';
 
 const COLLECTION_CONTENTS: CardProps[] = [
   {
@@ -60,10 +62,35 @@ export default function HomeScreen() {
         contentContainerStyle={{ gap: 20, paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >
-        <AppText>Test</AppText>
+        <CardExample />
         <CardSlide imageAssets={COLLECTION_CONTENTS} />
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+export function CardExample() {
+  return (
+    <Card>
+      <View className="gap-4">
+        <Card.Body className="mb-4">
+          <View className="gap-1 mb-2">
+            <Card.Title className="text-pink-500">$450</Card.Title>
+            <Card.Title>Living room Sofa • Collection 2025</Card.Title>
+          </View>
+          <Card.Description>
+            This sofa is perfect for modern tropical spaces, baroque inspired spaces.
+          </Card.Description>
+        </Card.Body>
+        <Card.Footer className="gap-3">
+          <Button variant="primary">Buy now</Button>
+          <Button variant="ghost">
+            <Button.Label>Add to cart</Button.Label>
+            <Ionicons name="bag-outline" size={16} />
+          </Button>
+        </Card.Footer>
+      </View>
+    </Card>
   );
 }
 
