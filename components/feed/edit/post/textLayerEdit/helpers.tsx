@@ -1,16 +1,23 @@
 import { useEffect, useRef } from 'react';
-import { Animated, PanResponder, View, Text } from 'react-native';
+import { Animated, PanResponder, View, Text, Image } from 'react-native';
 import { FontKey, fontList } from '@/theme/font';
 import { textLayerStyle } from '@/components/feed/edit/post/textLayerEdit/styles';
-import { TextLayerDraft } from '../types';
+import { StickerLayerDraft, TextLayerDraft } from '../types';
 
 const DRAG_THRESHOLD = 8;
 
-export type SavedTextLayerProps = {
-  layer: TextLayerDraft;
+export type SavedLayerType = {
   onSelect?: (id: string) => void;
   onMove?: (id: string, x: number, y: number) => void;
   editable?: boolean;
+};
+
+export type SavedTextLayerProps = Pick<SavedLayerType, 'onMove' | 'onSelect' | 'editable'> & {
+  layer: TextLayerDraft;
+};
+
+export type SavedStickerLayerProps = Pick<SavedLayerType, 'onMove' | 'onSelect' | 'editable'> & {
+  layer: StickerLayerDraft;
 };
 
 /* Helper Functions */
@@ -149,6 +156,99 @@ export function SavedTextLayer({ layer, onSelect, onMove }: SavedTextLayerProps)
         >
           {layer.text}
         </Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+export function SavedStickerLayer({ layer, onSelect, onMove }: SavedStickerLayerProps) {
+  const pan = useRef(new Animated.ValueXY({ x: layer.x, y: layer.y })).current;
+  const startRef = useRef({ x: layer.x, y: layer.y });
+  const layerRef = useRef(layer);
+
+  const onSelectRef = useRef(onSelect);
+  const onMoveRef = useRef(onMove);
+
+  useEffect(() => {
+    layerRef.current = layer;
+    pan.setValue({ x: layer.x, y: layer.y });
+  }, [layer, pan]);
+
+  useEffect(() => {
+    onSelectRef.current = onSelect;
+  }, [onSelect]);
+
+  useEffect(() => {
+    onMoveRef.current = onMove;
+  }, [onMove]);
+
+  const distance = (dx: number, dy: number) => Math.sqrt(dx * dx + dy * dy);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+
+      onPanResponderGrant: () => {
+        const currentLayer = layerRef.current;
+        startRef.current = { x: currentLayer.x, y: currentLayer.y };
+        pan.setOffset({ x: startRef.current.x, y: startRef.current.y });
+        pan.setValue({ x: 0, y: 0 });
+      },
+
+      onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], {
+        useNativeDriver: false,
+      }),
+
+      onPanResponderRelease: (_, g) => {
+        pan.flattenOffset();
+
+        const currentLayer = layerRef.current;
+        const nextX = startRef.current.x + g.dx;
+        const nextY = startRef.current.y + g.dy;
+
+        if (distance(g.dx, g.dy) < DRAG_THRESHOLD) {
+          if (onSelectRef.current) {
+            onSelectRef.current(currentLayer.id);
+          }
+          return;
+        }
+
+        pan.setValue({ x: nextX, y: nextY });
+        if (onMoveRef.current) {
+          onMoveRef.current(currentLayer.id, nextX, nextY);
+        }
+      },
+
+      onPanResponderTerminate: (_, g) => {
+        pan.flattenOffset();
+
+        const currentLayer = layerRef.current;
+        const nextX = startRef.current.x + g.dx;
+        const nextY = startRef.current.y + g.dy;
+
+        if (distance(g.dx, g.dy) >= DRAG_THRESHOLD) {
+          pan.setValue({ x: nextX, y: nextY });
+          if (onMoveRef.current) {
+            onMoveRef.current(currentLayer.id, nextX, nextY);
+          }
+        }
+      },
+    }),
+  ).current;
+
+  return (
+    <Animated.View
+      {...panResponder.panHandlers}
+      style={[
+        textLayerStyle.textBox,
+        {
+          transform: [{ translateX: pan.x }, { translateY: pan.y }],
+          backgroundColor: 'transparent',
+        },
+      ]}
+    >
+      <View style={textLayerStyle.overlayContainer}>
+        <Image source={{ uri: layer.uri }} />
       </View>
     </Animated.View>
   );

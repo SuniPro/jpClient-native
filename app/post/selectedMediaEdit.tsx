@@ -6,7 +6,14 @@ import { usePostGalleryStore } from '@/stores/post-gallery.store';
 import { useEffect, useMemo, useState } from 'react';
 import { AddLayerModal } from '@/components/feed/edit/post/AddLayerModal';
 import Button from '@/components/ui/button/Button';
-import { ArrowRight, HighWriter, LocateFixed, Return, Thermometer } from '@/assets/icons/icon';
+import {
+  ArrowRight,
+  HighWriter,
+  LocateFixed,
+  Return,
+  Sticker,
+  Thermometer,
+} from '@/assets/icons/icon';
 import { useNavigation } from 'expo-router';
 import { EditedMediaDraft, EditedMediaDraftMap } from '@/types/app/post/type';
 import { PickerAsset } from '@/components/gallery/types';
@@ -65,17 +72,6 @@ export default function SelectedMediaEditScreen() {
   });
 
   const [selectedMediaId, setSelectedMediaId] = useState<string>(filteredAssets[0].id);
-
-  useEffect(() => {
-    console.log('[editedMediaDraftMap] id = ', editedMediaDraftMap[selectedMediaId]);
-    console.log(
-      '[editedMediaDraftMap] textLayers = ',
-      editedMediaDraftMap[selectedMediaId].textLayers,
-    );
-
-    console.log('[selectedMediaId]', selectedMediaId);
-  }, [editedMediaDraftMap, selectedMediaId]);
-
   const [editorModalOpen, setEditorModalOpen] = useState(false);
   const [editorModalInitialMode, setEditorModalInitialMode] = useState<
     'text' | 'sticker' | 'filter'
@@ -123,7 +119,6 @@ export default function SelectedMediaEditScreen() {
           justifyContent: 'space-between',
           width: '100%',
           paddingHorizontal: 20,
-          // marginBottom: 30,
         }}
       >
         <Pressable onPress={navigation.goBack}>
@@ -167,6 +162,15 @@ export default function SelectedMediaEditScreen() {
           style={{ backgroundColor: '#2E303300' }}
         />
         <Button
+          onPress={openStickerEditor}
+          label={<Sticker width={20} height={20} color="white" />}
+          size="xl"
+          fullWidth={false}
+          variant="solid"
+          color="secondary"
+          style={{ backgroundColor: '#2E303300' }}
+        />
+        <Button
           label={<Thermometer width={20} height={20} color="white" />}
           size="xl"
           fullWidth={false}
@@ -191,6 +195,8 @@ const styles = StyleSheet.create({
     display: 'flex',
     flexDirection: 'row',
     justifyContent: 'center',
+    height: 22,
+    flex: 0,
     gap: '10',
   },
 });
