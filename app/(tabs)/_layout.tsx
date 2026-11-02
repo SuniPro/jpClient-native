@@ -2,12 +2,14 @@ import { Compass, Home, Route, Send, Write } from '@/assets/icons/icon';
 import { HapticTab } from '@/components/haptic-tab';
 import { useTheme } from '@/theme';
 import { Tabs } from 'expo-router';
+import { LiquidGlassTabBar } from '@/components/ui/navigation/liquid-glass-tab-bar';
 
 export default function TabLayout() {
   const theme = useTheme();
 
   return (
     <Tabs
+      tabBar={(props) => <LiquidGlassTabBar {...props} />}
       screenOptions={{
         tabBarActiveTintColor: theme.colors.iconDefault,
         headerShown: false,
@@ -20,7 +22,7 @@ export default function TabLayout() {
         options={{
           title: 'Home',
           tabBarIcon: ({ color, focused }) => (
-            <Home width={22} height={22} color={focused ? theme.colors.textAccent : color} />
+            <Home width={22} height={22} color={focused ? theme.colors.backgroundPrimary : color} />
           ),
         }}
       />
@@ -29,7 +31,11 @@ export default function TabLayout() {
         options={{
           title: 'Write',
           tabBarIcon: ({ color, focused }) => (
-            <Write width={22} height={22} color={focused ? theme.colors.textAccent : color} />
+            <Write
+              width={22}
+              height={22}
+              color={focused ? theme.colors.backgroundPrimary : color}
+            />
           ),
         }}
       />
@@ -38,7 +44,11 @@ export default function TabLayout() {
         options={{
           title: 'Explore',
           tabBarIcon: ({ color, focused }) => (
-            <Compass width={22} height={22} color={focused ? theme.colors.textAccent : color} />
+            <Compass
+              width={22}
+              height={22}
+              color={focused ? theme.colors.backgroundPrimary : color}
+            />
           ),
         }}
       />
@@ -47,7 +57,7 @@ export default function TabLayout() {
         options={{
           title: 'DM',
           tabBarIcon: ({ color, focused }) => (
-            <Send width={22} height={22} color={focused ? theme.colors.textAccent : color} />
+            <Send width={22} height={22} color={focused ? theme.colors.backgroundPrimary : color} />
           ),
         }}
       />
@@ -56,7 +66,11 @@ export default function TabLayout() {
         options={{
           title: 'Route',
           tabBarIcon: ({ color, focused }) => (
-            <Route width={22} height={22} color={focused ? theme.colors.textAccent : color} />
+            <Route
+              width={22}
+              height={22}
+              color={focused ? theme.colors.backgroundPrimary : color}
+            />
           ),
         }}
       />

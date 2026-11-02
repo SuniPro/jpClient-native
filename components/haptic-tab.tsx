@@ -16,3 +16,9 @@ export function HapticTab(props: BottomTabBarButtonProps) {
     />
   );
 }
+
+export const triggerLightHaptic = () => {
+  if (process.env.EXPO_OS === 'ios') {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).then();
+  }
+};

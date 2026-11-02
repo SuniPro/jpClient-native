@@ -1,6 +1,7 @@
 import Foundation
 import Photos
 import UIKit
+import CryptoKit
 
 actor ThumbnailService {
     private let imageManager = PHCachingImageManager()
@@ -14,61 +15,42 @@ actor ThumbnailService {
         assetId: String,
         options: ThumbnailOptions
     ) async -> URL? {
-        let scale = await MainActor.run {
-            UIScreen.main.scale
-        }
-        
-        let key = ThumbnailKey(
+        let key = await makeKey(
             assetId: assetId,
-            pixelWidth: Int(options.width * scale),
-            pixelHeight: Int(options.height * scale),
+            options: options
         )
-        
-        // 1. Memory cache
-        if let cachedURL = memoryCache[key] {
-            return cachedURL
+
+        if let url = cachedURL(for: key) {
+            return url
         }
-        
-        // 2. Disk cache
+
         guard let fileURL = try? cacheFileURL(for: key) else {
             return nil
         }
-        
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            memoryCache[key] = fileURL
-            return fileURL
-        }
-        
-        // 3. Same request already running.
-        //
-        // All callers await the same Task instead of maintaining separate
-        // loading sets and completion arrays.
+
         if let existingTask = inFlightTasks[key] {
             return await existingTask.value
         }
-        
-        // 4. Start request
+
         let task = Task<URL?, Never> { [weak self] in
-            guard let self else {
-                return nil
-            }
-            
+            guard let self else { return nil }
+
             return await self.generateThumbnail(
                 key: key,
                 fileURL: fileURL
             )
         }
-        
+
         inFlightTasks[key] = task
-        
+
         let result = await task.value
-        
+
         inFlightTasks[key] = nil
-        
+
         if let result {
             memoryCache[key] = result
         }
-        
+
         return result
     }
     
@@ -76,30 +58,12 @@ actor ThumbnailService {
         assetId: String,
         options: ThumbnailOptions
     ) async -> URL? {
-        let scale = await MainActor.run {
-            UIScreen.main.scale
-        }
-        
-        let key = ThumbnailKey(
+        let key = await makeKey(
             assetId: assetId,
-            pixelWidth: Int(options.width * scale),
-            pixelHeight: Int(options.height * scale),
+            options: options
         )
-        
-        if let cachedURL = memoryCache[key] {
-            return cachedURL
-        }
-        
-        guard let fileURL = try? cacheFileURL(for: key) else {
-            return nil
-        }
-        
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return nil
-        }
-        
-        memoryCache[key] = fileURL
-        return fileURL
+
+        return cachedURL(for: key)
     }
     
     // MARK: - Generation
@@ -135,6 +99,28 @@ actor ThumbnailService {
         } catch {
             return nil
         }
+    }
+
+    // Check if a file exist
+    private func cachedURL(for key: ThumbnailKey) -> URL? {
+        if let url = memoryCache[key] {
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+
+            memoryCache.removeValue(forKey: key)
+        }
+
+        guard let url = try? cacheFileURL(for: key) else {
+            return nil
+        }
+
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+
+        memoryCache[key] = url
+        return url
     }
     
     // MARK: - Photos
@@ -282,12 +268,10 @@ actor ThumbnailService {
     private func makeSafeAssetId(
         _ assetId: String
     ) -> String {
-        assetId
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: ":", with: "_")
-            .replacingOccurrences(of: " ", with: "_")
+        SHA256.hash(data: Data(assetId.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
-    
     
     func startCaching(
         assetIds: [String],
@@ -317,6 +301,21 @@ actor ThumbnailService {
             targetSize: targetSize,
             contentMode: .aspectFill,
             options: makeImageRequestOptions()
+        )
+    }
+    
+    private func makeKey(
+        assetId: String,
+        options: ThumbnailOptions
+    ) async -> ThumbnailKey {
+        let scale = await MainActor.run {
+            UIScreen.main.scale
+        }
+
+        return ThumbnailKey(
+            assetId: assetId,
+            pixelWidth: max(1, Int(options.width * scale)),
+            pixelHeight: max(1, Int(options.height * scale))
         )
     }
     

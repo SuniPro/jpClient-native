@@ -1,5 +1,5 @@
-import PostMediaPickerScreen from '@/components/gallery/Edit';
+import MediaPickerScreen from '@/components/gallery/MediaPickerScreen';
 
 export default function WriteScreen() {
-  return <PostMediaPickerScreen></PostMediaPickerScreen>;
+  return <MediaPickerScreen />;
 }
