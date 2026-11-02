@@ -20,8 +20,8 @@ SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
-  const theme = useTheme();
   const mode = colorScheme === 'dark' ? 'dark' : 'light';
+  const theme = useTheme();
 
   const themeColors = theme.colors;
 
